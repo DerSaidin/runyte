@@ -5120,6 +5120,502 @@ hosts started in other isolated Runyte environments.
   visibility allows. A responsive endpoint is kept when a PID namespace hides
   its process; one that cannot be observed conclusively is left out without
   being removed.
+`Ctrl-n`/`Ctrl-p`, opens with Enter, and closes with Escape. In Insert mode
+the completion popup appears after one of the server's trigger characters, on
+Insert `Ctrl-x`, or when `Space l c` enters Insert mode and asks explicitly.
+It then filters locally as you keep typing; `Tab` accepts and `Escape`
+dismisses. In an editable explorer, `Escape` also leaves Insert mode in that
+same press, because a directory row's structural `/` can open path completion
+without an explicit request. An automatic word-completion popup behaves the
+same way: `Escape` dismisses it and returns to Normal mode in one press.
+An explicit `Ctrl-x` request includes the identifier already before the caret,
+uses the server's `filterText` and `sortText` when present, and remains the
+active completion source until space, newline, acceptance, or dismissal.
+Typing punctuation does not hand that session to word or path completion; a
+trigger character refreshes its candidates for the new language context. If the
+current prefix has no matches the popup disappears without ending the session,
+so Backspace can reveal matching LSP candidates again. Backspace and Delete
+keep the session; moving the caret or running another editing command ends it.
+Enter is deliberately not an accept key for any completion source: a popup
+can open on its own — after a trigger character, or for any three-character
+word prefix — so Enter always inserts its usual newline and dismisses
+whatever was showing, rather than risking an unwanted candidate on a keystroke
+meant to end a line. A completion that needs an import applies both edits as a
+single undo step, and so does a rename across a file. All edits made between
+entering Insert mode and returning to Normal mode are likewise one undo step;
+undo and redo map the caret through the inverse edit instead of leaving it at
+a stale character offset.
+
+Path completion does not require a language server. In Insert mode, it opens
+a filterable popup of a directory's files and subdirectories as soon as the
+text immediately before the caret is a valid absolute or relative directory
+followed by a fragment of a name, which reopens it on any keystroke that
+leaves such a path before the caret — not only on typing `/`, so editing an
+already-typed path (moving the caret and continuing to type) shows hints just
+as typing it fresh would. Relative paths are resolved against both the active
+file's parent and the stable project root, so spellings such as `dir/`,
+`files/`, `./files/`, and `../files/` can follow whichever context makes them
+valid. Directory candidates retain a trailing `/`; accepting one immediately
+offers its children. A directory with more names than the popup will show is
+offered as its first few hundred in order, and typing more of a name narrows
+against the whole directory rather than against what the popup happened to be
+showing, so a name that exists is reachable however large the directory it
+sits in. The command palette's rows for a path argument work the same way.
+
+Word completion offers words already seen elsewhere in the workspace — every
+open buffer contributes, including the explorer, whose entries are filenames.
+It needs no language server and no trigger key: once a typed prefix reaches
+`editor.word_completion_minimum` characters (3 by default), the popup appears
+on its own in file buffers, the scratch buffer, and the commit message, using
+the same filtering, navigation, and acceptance as language and path
+completion. A word contains Unicode letters and numbers. A hyphen stays part
+of it only when it joins characters on both sides, so `up-to-date` stays whole;
+all other punctuation is a boundary and is never included in a candidate.
+This keeps the list focused on prose words, numbers, and source-code name
+fragments. Candidates from the buffer being typed in come first, ordered by
+how often each occurs there,
+followed by words from every other buffer in the same order; the word
+currently being typed is never offered as a completion of itself. A background
+index maintains this off the main thread, so a candidate can be one keystroke
+stale but a keystroke never waits on it. `Ctrl-x` still wins outright, replacing
+a word popup as soon as the request is sent, and a path in progress takes over
+the moment `/` is typed unless an explicit LSP session is active; word
+completion never overrides either one. Turn
+it off, or change the trigger length, with `editor.word_completion` and
+`editor.word_completion_minimum` in `Space o o`.
+
+### Text objects
+
+`m i` selects inside a text object and `m a` selects around it, spelled as
+Helix spells them. Every object works at every cursor, and the result is left
+in Select mode, so `d`, `c`, `y`, and `p` act on it and a motion extends it.
+
+| Key | Object |
+| --- | --- |
+| `m i w` / `m a w` | The word under the cursor / with the space beside it |
+| `m i W` / `m a W` | The WORD, everything between whitespace / with the space beside it |
+| `m i p` / `m a p` | The paragraph's lines / with the blank lines beside them |
+| `m i (` / `m a (`, also `[`, `{`, `<`, `"`, `'`, `` ` `` | Inside / around the enclosing pair; closing brackets are aliases |
+| `m i m` / `m a m` | Inside / around the closest enclosing pair of any of those kinds |
+| `m i f` / `m a f` | Inside / around the enclosing function |
+| `m i t` / `m a t` | Inside / around the enclosing type, such as a class or struct |
+| `m i a` / `m a a` | Inside / around the enclosing argument or parameter |
+
+Words and paragraphs are read from the text alone, so they work in every
+buffer. A word is a run of letters, digits, and `_`, a run of punctuation, or
+a run of whitespace; a WORD is everything between whitespace. Around adds the
+whitespace after the word, or the whitespace before it when nothing follows on
+the line. Neither crosses a line break, and a cursor on an empty line has no
+word. A paragraph is a run of lines holding text, separated by lines that are
+empty or hold only whitespace; on a blank line, `m i p` selects the run of
+blank lines. Around adds the blank lines after the paragraph, or before it
+when it ends the file. A paragraph is selected as whole lines, the way `x`
+selects them, so `m i p d` removes its lines and `x` extends the selection.
+
+Delimiter pairs resolve through the syntax tree when the buffer has one, which
+tells a bracket in code from one in a string. Where there is no tree — plain
+text, a language without a grammar, or a file still parsing — or the tree
+finds no enclosing pair, as inside a comment, a balanced scan of the text
+answers instead. Brackets nest and may span lines; the scan reaches 65,536
+characters on each side of the selection. Quotes pair up from the start of the
+line, so a quoted string spanning lines is not found this way. A delimiter
+escaped with a backslash is text. Asking again with a pair already selected
+grows to the next pair out. In ordinary Markdown prose, where punctuation is
+not represented by delimiter nodes, the scan is bounded to the enclosing
+Markdown syntax node first.
+
+Functions, types, and arguments need the syntax tree. Without one they report
+why and leave the selection alone.
+
+### Structural syntax
+
+| Key | Action |
+| --- | --- |
+| `Space x e` / `Space x s` | Expand / shrink syntax selection |
+| `Space x p` / `Space x c` | Select syntax parent / first child |
+| `Space x h` / `Space x l` | Select previous / next syntax sibling |
+| `Space x o` | Open the immediate Tree-sitter document outline |
+| `Space x x` | Toggle the syntax fold at the cursor |
+| `Space x f` / `Space x u` | Fold / unfold all syntax regions in this pane |
+| `Space x [ f/c/p` | Go to the previous function / class / parameter |
+| `Space x ] f/c/p` | Go to the next function / class / parameter |
+
+Structural expansion retains Tree-sitter's half-open bounds. Relationship
+commands and the syntax [text objects](#text-objects) present those same
+bounds with the block cursor on the last included character, matching ordinary
+Select mode; yank, delete, change, and indentation still act on exactly the
+highlighted syntax span.
+
+`editor.auto_close` is off by default. Enable it in `Space o o` to pair typed
+Insert-mode `()`, `[]`, `{}`, single quotes and double quotes. The caret stays
+inside the pair; typing a matching closer already under it moves past that
+character. Backspace between an empty pair removes both characters, including
+pairs already present in the document. Openers pair before whitespace, closing
+punctuation, or the end of the buffer. Quotes also need a non-word boundary
+before them; escaped quotes and apostrophes within words stay literal. This is
+a local text heuristic, independent of language syntax. Paste, Replace mode,
+prompts and terminal input remain literal. Each caret is handled independently.
+
+`o` and `O` preserve the current row's exact leading spaces and tabs, placing
+the new caret after that indentation. They do not continue list markers or
+add a syntax-driven indentation level. This also works with smart newline off.
+
+In Insert mode, Enter preserves the row's exact leading tabs/spaces and adds
+at most one level in `editor.indent` style when the syntax indentation query
+requests it; a grammar that requires a tab still gets a tab. With
+`editor.smart_newline` enabled, as it is by default, Markdown list items
+continue on Enter: bullets keep their marker, numbered and lettered items
+advance, and task items start unchecked. Enter on an empty item ends the list.
+Backspace directly after a marker changes it to a continuation indent, whether
+or not text follows the caret; another Backspace removes that alignment in one
+press. Each of these edits renumbers the numbered or lettered items after the
+one it adds or removes while they were in sequence, passing over nested items,
+continuation lines, and blank lines; a list numbered `1.` throughout or one
+with a gap keeps its numbers from that point on. A single `I.` or `V.` advances
+as a letter unless the preceding sibling establishes Roman numbering. In other
+file types, smart newline retains the existing alignment under a list item's
+content. With `editor.smart_newline: false`, Enter preserves only the row's
+existing leading indentation.
+Unsupported, malformed, oversized, and unterminated-final-line cases retain
+the exact prefix and never block newline insertion. Syntax folds
+are pane-local: two panes may collapse different regions of one shared buffer,
+and any edit invalidates both panes' revision-scoped folds. A collapsed row is
+marked by an accent-colored `▸` between its line number and the gutter rule;
+its muted `… N lines` suffix reports how many complete rows are hidden.
+
+Language servers may not create, rename, or delete files. A workspace edit
+that asks for one has those operations reported and skipped, and files a
+rename touches are opened as buffers rather than written behind your back.
+Text edits must name absolute local files inside the project and exact,
+forward-ordered character boundaries; malformed, remote, out-of-range, and
+overlapping edits reject the complete multi-file change. Open target buffers
+are guarded at the revisions from which a request was made, including targets
+other than the command's source buffer. Versioned diagnostic publications are
+likewise ignored after their open document advances.
+
+### Plugins
+
+Type `::` for the plugin-only command palette, with completion and descriptions.
+Plugins can declare short names such as ru-time's `::time`, `::time-add`, and
+`::time-delete`. Full `:plugin.<id>.<command>` names remain available.
+Conflicting short names are disabled for all claimants and reported in
+`:notifications`; stopping a claimant restores a name when it becomes unique.
+Backspace over the second colon returns to the ordinary command palette.
+
+`:plugins` opens the native manager for configured, disabled and failed plugins.
+Select an entry to inspect its capabilities, jobs, activity, helpers and diagnostic
+summary; Enter offers lifecycle actions. `:plugin-stop <id>` stops an owner and
+`:plugin-restart <id>` requests a fresh connection after cleanup finishes.
+Stopping a pending restart cancels it. Retained views remain readable and dirty
+provider documents remain editable. Restart does not replay old actions.
+
+Explicitly enabled process plugins can register commands, read the invoking
+buffer's text and selections, and return replacements as one undoable edit.
+They run asynchronously; changing the invoking text rejects stale results.
+Persistent hosts retain their plugin processes across TUI detach and reattach.
+In an application view, Tab offers actions from its plugin. Plugins supporting
+row-dependent actions can tailor that list to the selected rows: for example,
+a connected database can offer Disconnect while a disconnected one offers
+Connect. Multiple selected rows offer only actions common to all of them.
+Moving the selection after opening the menu requires reopening it; changed
+models are checked again before an action runs. Other plugins retain their
+view-wide menus.
+
+Plugins can give actions readable labels and group the Tab menu into named
+sections. Headings cannot be selected; typing filters actions across sections.
+Enter can still open the selected item when its internal callback is hidden
+from the menu. View titles identify the content, and plugins can place labelled
+facts such as filters or a database path above it.
+
+A plugin can open a complete read-only document on demand. It scrolls, searches
+and copies as one buffer, including content received in internal chunks. The
+supported body limit is 8 MiB and 250,000 lines; loading can fail when the host's
+shared memory allowance is occupied. A shortened preview remains a preview until
+the plugin loads and publishes the complete content.
+
+Application plugins also provide retained native views, typed commands,
+finite background jobs, explicit buffer/selection operations and bounded local
+filesystem operations with native confirmation, plus native prompts, filterable
+choices and forms with masked secret fields. Plugin text and secret fields reject
+an entire paste if it contains control characters (including a trailing newline)
+or exceeds the field's byte or character limit. Feedback identifies the cause;
+the existing value and cursor stay unchanged. Required fields and minimum lengths
+are checked when submitting the form.
+
+Applications can also create named unsaved documents and save them asynchronously:
+later edits stay dirty, and pending or uncertain writes cannot silently complete
+a close or `--wait` request.
+Applications can subscribe to buffer, pane, owned view/job and attachment metadata
+with consistent baselines and bounded ordered delivery. New-buffer discovery
+needs no polling; slow consumers receive an explicit resynchronization marker.
+Opted-in form fields can validate asynchronously after Enter. Editing keeps the
+form open and rejects stale results; secret values reach validation only when
+that field explicitly opts in. Validation runs without blocking editor input.
+Plugins can also opt text fields into local path completion. Type a directory
+or filename prefix, select with Up/Down, and press Tab to complete. Directory
+suggestions continue into that directory. Shift-Tab returns to the previous
+field and Escape cancels. Enter completes the selected suggestion while the
+typed path does not name an existing entry, and submits once it does. Relative paths start at the workspace
+root; spaces and quotes are literal, and `~` or environment variables are not
+expanded. Older hosts retain the plugin's ordinary text field behavior.
+Provider applications can also open version-bound UTF-8 documents with normal
+editing, syntax highlighting and remote saves. Providers with conditional writes
+save normally; weaker providers require native foreground confirmation describing
+the overwrite race and replacement guarantee. Cancelling preserves text and undo.
+Newer edits remain
+dirty during uploads; save-and-close waits for confirmed success. Explicit rebind
+reconciles restarted providers and uncertain writes. `:diff-remote` compares fresh
+remote text with local edits without changing the saved baseline; both sides must
+fit the 4 MiB comparison limit. Native `:reload` reads fresh remote text; dirty
+or uncertain documents offer reload, keeping local edits against a new baseline,
+or cancellation.
+Reload is one undoable edit and preserves earlier history. Unknown writes require
+provider settlement before accepting a baseline. Each side may contain at most
+8 MiB. See [provider recovery](plugins/applications.md#native-reload-and-conflict-recovery).
+The runnable
+[SFTP browser and editor](plugins/applications.md#sftp-browser-and-editor) verifies
+SSH host keys, uses explicit identity files or an existing SSH agent, and opens
+remote UTF-8 documents up to 8 MiB. Run `::sftp .` with its documented
+profile; Enter opens a selected file, and native `:write` confirms the remaining
+remote overwrite race. The [FTP/FTPS example](plugins/applications.md#ftp-and-ftps-browser-and-editor)
+shares the browser and editor workflow using standard-library transport. It
+defaults to certificate-verified FTPS with encrypted data connections; unencrypted
+FTP is an explicit profile choice and is labeled in the UI. FTP and FTPS require
+native save confirmation of non-atomic replacement and read credentials from an
+explicit private file. In either remote browser, `download` prompts for a new local path
+and stages up to 8 MiB of arbitrary file bytes before native filesystem
+confirmation. When the browser shows `Download ready`, use `confirm-download`
+to present the native review; downloads never publish automatically.
+`cancel-download` cancels unaccepted work. Remote identities stay separate from
+local files. The
+[application guide](plugins/applications.md) also includes runnable task-list,
+local file-manager, document, memory-provider and background-job examples and
+lists the remaining work.
+The [todo showcase](plugins/todo/README.md) provides matching Python, Rust and C
+applications with task creation, completion, removal and filtering.
+
+Applications can launch [managed helpers](plugins/applications.md#managed-helpers)
+with bounded binary input and retained output. Their output stays separate from
+the plugin protocol. Closing a helper or stopping its plugin cleans up and reaps
+the owned process tree; naturally exited output stays readable until released.
+The runnable helper controller demonstrates Send, Flood, EOF and Close actions
+without a network service. Enabled idle helpers alone do not prevent persistent
+host retirement. Applications can also publish owner-labelled notifications
+without changing focus or current action feedback. Explicit native handoffs can
+open a terminal session, an HTTP/HTTPS URL in the system browser, or an existing
+workspace file with its system handler. A terminal handed to the editor survives
+plugin stop and follows normal terminal-session retention. See the
+[handoff example](plugins/applications.md#notifications-and-native-handoffs).
+
+Continuing playback or service work can hold a renewable
+[activity lease](plugins/applications.md#continuing-activity), lasting at most ten
+minutes per grant. Session health and `:service-health` identify its owner, title
+and state. Active leases and their two-second cancellation cleanup grace protect
+normal quit and idle retirement; detach keeps them running. An owner that does
+not acknowledge expiry or cancellation is stopped, cleaning up its managed
+helpers. The `:q!` spelling does not bypass this protection. Use `:plugins` to
+stop the owner before quitting; in persistent mode, `:detach` leaves its work
+running. Explicit forced persistent-session stop remains available.
+
+The optional [local media controller](plugins/applications.md#local-media-controller)
+plays workspace audio and video files through an installed mpv. Its native
+playlist provides play, pause, relative seek, next, previous and stop actions;
+video appears in mpv's external window. Playback continues across detach and
+protects the persistent session while active. Pausing releases that protection;
+stop closes the owned player. The [service adapter guide](plugins/media-services.md)
+describes Spotify prerequisites and YouTube browser playback separately.
+
+Applications can read their configured settings and save bounded nonsecret
+workspace preferences through the [settings and state API](plugins/applications.md#settings-and-workspace-state).
+State updates check the revision observed by the application and preserve existing
+data on conflict. The runnable `preferences.py` example demonstrates a configured
+default and a saved destination that survives restarting the editor. Secrets
+belong in an established credential manager or authentication helper.
+
+The SFTP and FTP/FTPS browsers can upload a workspace disk file of at most 8 MiB
+with `upload`. Preparation freezes its bytes; `confirm-upload` then opens native
+confirmation for the remote destination. Unsaved editor text is separate from the
+disk file. `cancel-upload` cancels pending work, while an unknown promotion outcome
+remains visible and blocks another upload until explicit plugin restart. See
+[binary uploads](plugins/applications.md#binary-uploads-from-workspace-disk-files).
+
+The SFTP and FTP/FTPS reference browsers also provide `mkdir`, `rename` and
+`delete` actions for one remote file or empty directory. After preparation,
+`confirm-operation` opens native confirmation; `cancel-operation` cancels pending
+work. Deletion is permanent, checks are best effort, and an unknown outcome must
+be inspected before any retry. Existing remote documents keep their original
+identity and unsaved text. See the [remote operation guide](plugins/applications.md#confirmed-remote-directory-operations).
+
+The runnable example, installation and configuration, command bindings, errors,
+subscription behavior, limits and stable API are in the
+[plugin guide](plugins.md). There is no package manager or automatic plugin
+discovery. Enabled programs run with your permissions; they are not sandboxed.
+
+### Commands
+
+Pressing `:` opens the categorized command palette with every command, its
+aliases, usage, and short description. Filtering searches canonical names,
+aliases, descriptions, and categories. Commands whose active-buffer service
+is unavailable remain discoverable but are dimmed with a reason; activating
+one leaves the typed command and editor state intact. Use Up/Down to select a
+result, Tab to complete it, Enter to run it, and Escape to close the palette.
+Once a command with a path argument is selected, the rows become bounded
+filesystem hints from the editor working directory (or from the absolute path
+being typed). Directories appear first with a trailing separator; completing
+one keeps the palette open for its children, while running `:open` on it opens
+the editable directory explorer. A leading `~` means the user's home directory,
+so paths such as `:open ~/.bashrc` and `:open ~/projects` work without shell
+expansion. Dotfiles are offered when their name begins with `.` or hidden files
+are enabled.
+
+Every path prompt treats Enter the same way: the palette's path arguments, the
+`Space / p` finder path, and plugin fields that complete local paths. While
+hints are showing and the typed path does not name an existing file or
+directory, Enter accepts the selected hint exactly as Tab does. Once the path
+exists, Enter submits it, so `:cd sr` Enter Enter completes to `src/` and then
+changes into it. A new name that is a prefix of an existing one is completed
+too: `:w notes` beside `notes.md` becomes `:w notes.md`. Hints only follow a
+cursor at the end of the line, so press Left and then Enter to submit `notes`
+as typed. Completion in a buffer, of
+words, language-server items, or paths, still takes only Tab; Enter there
+inserts a newline.
+
+```text
+:cd <path>               change the working directory; retarget an active explorer
+:about                   show Runyte's logo, version, and getting-started guide
+:tutorial [reset|sessions]
+                        open or resume the interactive tutorial; reset starts
+                        over and sessions opens its persistent-session lesson
+:zen                     toggle a centered, maximized editable writing viewport
+:fullscreen              toggle the active pane across the whole editor area, at its ordinary width
+:close                  close the active buffer in place (aliases: c, buffer-close, bc, close-buffer, cb)
+:close!                 discard unsaved text and close the active buffer (aliases: c!, buffer-close!, bc!)
+:window-close           close the active pane, but not the last one (alias: wc)
+:buffer-new             open a new scratch buffer in the current pane (alias: new)
+:diff-disk              compare a fresh disk snapshot with the active file buffer
+:diff-remote            compare a fresh remote snapshot with the active provider document
+:diff-this              mark this buffer, or compare it with the one marked before it (aliases: difft, dt)
+:diff-off               close the comparison this buffer is part of (alias: do)
+:explorer [path]        open an editable directory explorer (alias: files)
+:file-picker            open the Finder over files, buffers, and terminals
+:file-picker-directory  fuzzy-find below the active file/explorer directory
+:open-explorer-finder   open the Finder at the active explorer's directory
+:fuzzy-grep             open the Finder in content mode
+:fuzzy-grep-directory   fuzzy-search contents below the active file/explorer directory
+:format                 format the active buffer (alias: fmt)
+:git-blame              show live-buffer attribution for the primary line
+:git-blame-file         open full-file live-buffer attribution
+:git-branches           open the local and cached remote branch list
+:git-cancel             stop the active Git operation and reconcile mutations
+:git-commit             write a message and commit what is staged
+:git-diff               show the active file's unstaged diff
+:git-diff-side-by-side  compare the active file's complete Git versions
+:git-discard            throw away a file's uncommitted changes, after a confirmation
+:git-index              review everything staged for the next commit
+:git-log                open the Git log, or refresh it from its first page
+:git-search-commits     fuzzy-search commits by message, ID, author, or date with a full-message preview
+:git-refresh            refresh Git state or retry failed repository discovery
+:git-stage              stage the active file, or every file selected in the list
+:git-stage-hunk         stage the exact hunk under the cursor
+:git-stage-lines        stage the supported saved source-line selection
+:git-stash-all <name>   stash tracked worktree and index changes, after a confirmation
+:git-stash-apply        apply the selected stash without dropping it, after a confirmation
+:git-stash-drop         drop the selected stash, after a confirmation
+:git-stash-tracked <name>
+                        stash a tracked-worktree snapshot, leaving the index applied
+:git-stash-untracked <name>
+                        stash tracked changes and untracked files together
+:git-stashes            open or refresh the bounded stash list
+:git-status             open the changed-file list
+:git-unstage            unstage the active file, or every file selected in the list
+:git-unstage-hunk       unstage the exact staged hunk under the cursor
+:git-worktrees          open the repository worktree list
+:git-compare            compare committed tips with the selected branch or worktree
+:grammar [runyte]       report the active Runyte editing grammar
+:help [topic]           open the general manual, optionally at a named section (alias: ?)
+:log-open               open the diagnostic log owned by the process that
+                        holds this workspace
+:lsp-trust              choose workspace permission to run language servers
+:lsp-restart [language] restart stopped language servers
+:lsp-status             report language server state
+:notifications          open retained notification history (alias: not)
+:service-health         inspect syntax, LSP, providers, and helper health (alias: health)
+:plugins                open the configured plugin manager
+:plugin-stop <id>       stop a configured plugin or cancel its pending restart
+:plugin-restart <id>    restart a configured plugin after its cleanup finishes
+:hsplit [path]          create a stacked split (alias: split)
+:open <path>            open a file or directory in the active pane (aliases: e, edit)
+:path                   show the active buffer's absolute path in a popup;
+                        Tab offers copying it to the system clipboard or the
+                        unnamed Runyte register
+:detach                 disconnect this persistent TUI while retaining all editor state
+:quit                   close the pane and its unique buffer, or stop safely from the last one (alias: q)
+:quit!                  discard its unique buffer, or force quit from the last pane (alias: q!)
+:quit-all               quit safely regardless of pane count, without ending terminals (alias: qa)
+:quit-all!              discard buffer changes and quit, without ending terminals (alias: qa!)
+:quit-here              quit and return the shell to the active directory (alias: qh)
+:quit-here!             discard changes, quit, and return there (alias: qh!)
+:reload                 reload the active local/provider file or refresh the explorer or supported Git list
+:resize-right +/- N     grow or shrink the pane at its right edge by N cells
+:resize-left +/- N      grow or shrink the pane at its left edge by N cells
+:resize-top +/- N       grow or shrink the pane at its top edge by N cells
+:resize-bottom +/- N    grow or shrink the pane at its bottom edge by N cells
+:outline                open the immediate Tree-sitter document outline
+                        (alias: document-outline)
+:config                 open the settings menu (alias: settings)
+:config-reload          re-read the loaded configuration file into this session
+:write-config [path]    write the effective configuration to a new file
+:write-config! [path]   write it, replacing an existing file
+:context-access [identity]
+                        review, grant, inspect, or revoke agent context access
+:terminal [command]     run a program in this pane, or $SHELL (aliases: t, term)
+:terminal-file-directory [command]
+                        run from the active file's parent
+:terminal-directory-root [command]
+                        run from the active explorer root
+:terminal-selected-directory [command]
+                        run from the selected directory entry
+:terminal-session-directory <number|name>
+                        run a shell from another terminal's safe directory
+:terminals              list the running terminals and show one here
+:terminal-show <number|name>
+                        show a terminal in this pane
+:terminal-rename <name> name this pane's terminal
+:terminal-output        copy this terminal's output into a read-only buffer
+:terminal-send [number|name]
+                        send the selection, or the whole buffer, to a terminal
+:theme [name]           choose a theme in the settings menu, or switch
+                        straight to the named one
+:vsplit [path]          create a side-by-side split
+:write [path]           save, optionally choosing a path (aliases: w, save)
+:write! [path]          save, replacing an existing file or one that changed
+                        on disk (aliases: w!, save!)
+:write-quit             save, then close the pane or quit from the last one (alias: wq)
+:write-buffer-close     save and close the buffer in place (alias: wbc)
+:session-1 … :session-9 attach directly to the numbered running persistent session
+:session-list           open the session manager (Unix persistent mode or Windows native controls; alias: sl)
+:session-attach WORKSPACE
+                        attach to another workspace's persistent session
+                        (alias: attach)
+:session-stop [WORKSPACE]
+                        stop a clean persistent session
+:session-rename WORKSPACE NAME
+                        rename a persistent session
+:session-clean          clean verified stopped session history (Windows)
+```
+
+The working directory starts at the directory where Runyte was launched.
+`:cd <path>` changes it; relative paths are resolved from the current working
+directory. When an explorer is active, `:cd` also retargets that explorer.
+From a normal file buffer it leaves the file open. `Space e` opens the active
+buffer's directory and selects that file, so Enter returns to its buffer.
+From a rendered Markdown page, it uses the source document's directory and file.
+`Space E` opens the working directory. A pathless buffer falls back to the
+working directory. `Space f` (or `Space / f`) always opens the stable-project
+Finder in name mode, while `:fuzzy-grep` opens its content mode.
+`:file-picker-directory` and
+`:fuzzy-grep-directory` search the active file's parent, the active explorer's
+current root, or the working directory for a pathless/generated buffer.
 
 ### Change the shell directory on exit
 
@@ -5407,6 +5903,8 @@ The working directory starts where Runyte was launched.
 | --- | --- | --- |
 | `:config` | `settings` | Open the settings menu |
 | `:config-reload` | | Re-read the loaded configuration file into this session |
+| `:write-config [path]` | | Write the effective configuration to a new file, by default the per-user configuration file |
+| `:write-config! [path]` | | Write the effective configuration, replacing any existing file |
 | `:theme [name]` | | Choose a theme in the settings menu, or switch straight to the named one |
 | `:help [topic]` | `?` | Open the general manual, optionally at a named section |
 | `:about` | | Show Runyte's logo, version, and getting-started guide |
@@ -6111,6 +6609,141 @@ file's inherited value; otherwise it explains the varying inheritance and shows
 the global default.
 
 The same rules can be authored in YAML:
+When `XDG_CONFIG_HOME` is unset or empty, Linux and macOS use
+`~/.config/runyte/config.yaml`. The Windows port uses
+`%APPDATA%\runyte\config.yaml`.
+Empty environment values are ignored. If neither the override nor the
+platform default is available, no default configuration file is selected.
+Use `--config <path>` to load another file. A relative path is anchored to the
+directory where Runyte was launched, even when workspace initialization later
+enters another directory. All fields are optional.
+
+Open the registry-backed `[config]` buffer with `Space o o`, `:config`, or
+`:settings`. It is a left-aligned, read-only, searchable document: normal
+motions, selections, splits, and keybindings continue to work. Its
+columns show setting, saved value, and description, in that order. Setting and
+value widths follow their content, separated by two spaces; descriptions have
+no inserted line breaks or trailing padding. Setting names use the theme's
+function colour, values its constant colour, and descriptions normal text.
+Each setting occupies one logical line. The page follows `editor.soft_wrap`:
+`Space p s` toggles ordinary pane-width visual wrapping, and horizontal scrolling
+reaches long lines when wrapping is off. Wrapped continuations use normal
+buffer layout rather than aligning beneath the description column. Enter
+anywhere on a setting's line, including a visual continuation, opens its value
+popup. Finite grammar, boolean, and theme values use a choice list; numeric values use a typed popup
+that shows and enforces the registry's minimum and maximum. Moving through an
+immediate choice previews it, Escape rolls the preview back, and Enter
+atomically patches the loaded YAML file while preserving comments, ordering,
+and unknown fields.
+`Space o t` and a bare `:theme` open the theme choices directly. That list is
+the one long enough to be worth reading in halves, so `Tab` narrows it to the
+dark themes, then to the light ones, then back to every theme; the popup title
+names the group it is showing. The grouping comes from each theme's own
+background, so a theme declared in `themes:` is sorted into the same halves as
+a built-in one. Typing still filters within whichever group is shown. Changing
+`lsp.enable` is saved but explicitly reports that a restart is required; the
+menu never presents it as a live server transition.
+Changing `workspace.mode` is also restart-required because the standalone or
+persistent launch path is selected before the editor application starts; the
+saved choice applies to future bare launches.
+`workspace.idle_retirement_minutes` is in the same menu but applies at once: a
+persistent host reads it each time it considers retiring, so a shorter or
+longer interval takes effect without restarting the host it governs. Its
+default is `0`, which keeps idle hosts running; set a positive interval to
+retire them automatically, or use `:session-stop` to stop a host explicitly.
+Unrelated YAML flow collections (`{...}` and `[...]`), including multiline
+ones, are preserved when saving a setting. The setting being changed must
+still be a scalar in a block mapping; editing inside a flow mapping is not
+supported. YAML features that cannot be patched losslessly are rejected with the file
+left untouched. A failed save also rolls back any live preview while keeping
+the choice popup open for correction or retry.
+
+`Space o s` or `:service-health` opens a read-only snapshot of syntax registry
+failures, the active document's LSP configuration and attachment, Git repository
+discovery (including a retained failure or pending retry), and the
+diagnostic log's owner role, level, resolved path, and any failure. The
+report probes paths only and remains useful when every optional service is
+absent. In persistent mode its `log` row describes the host that owns the
+workspace, not the client process that opened the report.
+
+### Writing configuration
+
+`:write-config [path]` writes the whole effective configuration as one YAML
+file: every setting at its current value, the theme in use, the `keys` section,
+configured plugins, and every theme and language server, including the built-in
+ones. Without a path it writes the per-user configuration file,
+`$XDG_CONFIG_HOME/runyte/config.yaml` or `~/.config/runyte/config.yaml`
+(`%APPDATA%\runyte\config.yaml` on Windows), even when this session loaded
+another file with `--config`. A relative path is resolved from the working directory, `~` expands to
+the home directory, and missing parent directories are created.
+
+An existing file is left alone and the refusal says so; `:write-config!
+[path]` replaces it. A symlink's target is replaced and the link itself is
+kept, as a settings change does. The file is written atomically, and it is
+read back before it is written, so what lands on disk is always a
+configuration Runyte accepts.
+
+What is written is the saved configuration. A setting read at startup and
+changed since, such as `editor.mouse`, is written with its new value even
+though the running editor keeps its launch value until a restart. The written
+file carries no comments, and maps are written in name order, so writing the
+same configuration twice produces the same text.
+
+### Reloading configuration
+
+`:config-reload` re-reads the configuration file this editor loaded, including
+an explicit `--config PATH`, and brings the running editor into line with it.
+It is the supported path for changes made anywhere other than the `[config]`
+page: an edit in another editor, a file written by a script, or a correction to
+a plugin entry the host refused at startup. Nothing is watched or polled;
+the reload happens when the command runs, and only for the workspace the
+command was run in. Another running session reloads when you run it there.
+
+A reload that cannot be used changes nothing. Invalid YAML, a value outside its
+registry bounds, and a file that has been deleted are all reported with the
+running configuration left exactly as it was, so a half-written file cannot
+break a live editor. A file replaced atomically by a rename is read as its new
+contents; one truncated and rewritten in place can be caught mid-write, which
+fails as invalid YAML and can simply be reloaded again. A path that never had a
+file says so without treating it as a deletion, so creating the file and
+reloading again is the way to start using one mid-session.
+
+Settings that were read before the editor existed are reported rather than
+adopted. `editor.mouse`, `lsp.enable`, `workspace.mode`, `workspace.state`, and
+`workspace.state_anchor`
+keep the value this process started with, and the status line names them as
+requiring a restart. The `[config]` page then shows the file's value as saved
+while the effective value stays what the editor is actually doing. Everything
+else applies immediately, including the theme, the `keys` section — dispatch,
+help, and key hints are all rebuilt from it together, with the keys of every
+running plugin laid back over it — and `notifications.history_limit`. A `keys`
+section that collides with a running plugin's binding is refused on its own,
+leaving the bindings in use alone while the rest of the file still applies. A `theme:` naming something that cannot be built
+keeps the theme already on screen and says so, rather than repainting the
+editor with the default.
+
+Language servers are reconfigured rather than restarted wholesale. A server
+whose `command`, `args`, and `initialization_options` are unchanged keeps its
+process, handshake, open documents, and diagnostics; only a language whose
+definition changed stops and starts again on the next request, and a language
+removed from the file simply stops. A recorded launch failure is forgotten for
+any definition that changed, so a corrected command is tried instead of the
+broken one being reported forever.
+
+Configured plugins are reconciled by their `id`, so moving an entry in the file
+is not a change to the plugin it describes. An entry whose configuration is
+unchanged keeps its running process untouched. A changed entry restarts its
+plugin, and a removed or disabled one stops it — but never while work is in
+flight. A plugin with a running job, an activity lease, a helper process,
+outstanding cleanup, an unsaved remote document, an unanswered command, local
+filesystem work, or a prompt you are part-way through keeps running exactly as
+it was; the change waits on its record, `:plugins` shows the pending state, and a
+notification says so. The wait ends by itself: as soon as that work is gone the
+saved entry takes effect and is reported. `:plugin-restart <id>`, or
+`:plugin-stop <id>` for an entry the file no longer enables, applies it sooner
+if you would rather not wait. An entry added to the file starts from the reload, and one that
+was disabled or refused at startup can be corrected and started the same way,
+without restarting the editor.
 
 ```yaml
 editor:
@@ -7107,6 +7740,8 @@ with `{ command: name, argument: text }`.
 | `plugin-stop` | `plugin-stop <configured-id>` | Stop a plugin or cancel its pending restart |
 | `plugin-restart` | `plugin-restart <configured-id>` | Restart a configured plugin after cleanup |
 | `config-reload` | `config-reload` | Re-read the loaded configuration file without restarting |
+| `write-config` | `write-config [path]` | Write the effective configuration to a new file |
+| `write-config!` | `write-config! [path]` | Write the effective configuration, replacing any existing file |
 | `service-health` | `service-health` | Inspect optional editor service health |
 | `log-open` | `log-open` | Open this process's diagnostic log |
 | `notifications` | `notifications` | Open the retained notification history |

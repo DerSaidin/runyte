@@ -117,6 +117,8 @@ pub enum ColonCommand {
     GitUnstage,
     GitWorktrees,
     ConfigReload,
+    WriteConfig,
+    ForceWriteConfig,
     Grammar,
     LogOpen,
     LspTrust,
@@ -296,6 +298,8 @@ impl ColonCommand {
         Self::GitUnstage,
         Self::GitWorktrees,
         Self::ConfigReload,
+        Self::WriteConfig,
+        Self::ForceWriteConfig,
         Self::Grammar,
         Self::LspTrust,
         Self::ContextAccess,
@@ -393,6 +397,8 @@ impl ColonCommand {
             | Self::QuitHere
             | Self::ForceQuitHere => CommandCategory::Application,
             Self::ConfigReload
+            | Self::WriteConfig
+            | Self::ForceWriteConfig
             | Self::Grammar
             | Self::ContextAccess
             | Self::LogOpen
@@ -2016,6 +2022,22 @@ pub const COMMANDS: &[CommandSpec] = &[
         NoArguments
     ),
     spec!(
+        ColonId(Colon::WriteConfig),
+        "write-config",
+        [],
+        "write-config [path]",
+        "Write the effective configuration to a new file",
+        Optional(Path)
+    ),
+    spec!(
+        ColonId(Colon::ForceWriteConfig),
+        "write-config!",
+        [],
+        "write-config! [path]",
+        "Write the effective configuration, replacing any existing file",
+        Optional(Path)
+    ),
+    spec!(
         ColonId(Colon::ServiceHealth),
         "service-health",
         ["health"],
@@ -3104,7 +3126,10 @@ fn valid_colon_parameters(command: ColonCommand, parameters: &InvocationParamete
             Colon::ChangeDirectory | Colon::Open | Colon::SessionAttach,
             InvocationParameters::Path(path),
         ) => !path.as_os_str().is_empty(),
-        (Colon::SessionStop, InvocationParameters::OptionalPath(_)) => true,
+        (
+            Colon::SessionStop | Colon::WriteConfig | Colon::ForceWriteConfig,
+            InvocationParameters::OptionalPath(_),
+        ) => true,
         (Colon::SessionRename, InvocationParameters::SessionRename { workspace, name }) => {
             !workspace.as_os_str().is_empty() && !name.trim().is_empty()
         }
@@ -3442,7 +3467,9 @@ fn invocation_from_parts(
             )),
             _ => Err(invalid()),
         },
-        CommandId::Colon(ColonCommand::SessionStop) => match argument {
+        CommandId::Colon(
+            ColonCommand::SessionStop | ColonCommand::WriteConfig | ColonCommand::ForceWriteConfig,
+        ) => match argument {
             ParsedArgument::Path(path) => Ok(CommandInvocation::new(
                 id,
                 InvocationParameters::OptionalPath(path),

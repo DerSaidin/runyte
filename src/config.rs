@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt, fs,
     io::Read,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _, ser::SerializeMap};
 
 use crate::command::GrammarKind;
 use crate::notification::DEFAULT_HISTORY_LIMIT;
@@ -24,7 +24,7 @@ mod zenbones;
 
 pub use paths::default_config_root;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     /// The mode a launch without a mode option runs in. `None` falls back
@@ -40,13 +40,19 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     /// Raw so malformed key-remapping sections can be reported non-fatally by
     /// the keymap compiler after the built-in registry is available.
-    #[serde(default, deserialize_with = "deserialize_present_yaml_value")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_yaml_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub keys: Option<serde_yaml::Value>,
     /// The theme to start in, or `None` to use [`DEFAULT_THEME`].
     ///
     /// Theme choices made inside the editor are persisted back to this field,
     /// so configuration remains the single source of truth.
+    #[serde(serialize_with = "serialize_effective_theme")]
     pub theme: Option<String>,
+    #[serde(serialize_with = "serialize_sorted")]
     pub themes: HashMap<String, ThemeDefinition>,
 }
 
@@ -59,14 +65,32 @@ where
     serde_yaml::Value::deserialize(deserializer).map(Some)
 }
 
-#[derive(Clone, Debug, Deserialize)]
+/// Writes the theme a load would start in, so a written file names it rather
+/// than leaving the choice to whatever the default is when it is next read.
+fn serialize_effective_theme<S: Serializer>(
+    theme: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(theme.as_deref().unwrap_or(DEFAULT_THEME))
+}
+
+/// Writes a map in key order, so the same configuration always produces the
+/// same document.
+fn serialize_sorted<S: Serializer, V: Serialize>(
+    map: &HashMap<String, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    map.iter().collect::<BTreeMap<_, _>>().serialize(serializer)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct NotificationsConfig {
     /// Number of newest workspace-lifetime notifications retained in memory.
     pub history_limit: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct GitConfig {
     /// Minimum spacing and maximum staleness for automatic visible Git
@@ -174,6 +198,19 @@ where
     }
 }
 
+/// Written in the preferred shape, each language directly below `lsp`, which
+/// [`LspConfig`]'s reader turns back into the same servers.
+impl Serialize for LspConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(1 + self.servers.len()))?;
+        map.serialize_entry("enable", &self.enable)?;
+        for (language, server) in self.servers.iter().collect::<BTreeMap<_, _>>() {
+            map.serialize_entry(language, server)?;
+        }
+        map.end()
+    }
+}
+
 impl<'de> Deserialize<'de> for LspConfig {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -212,16 +249,17 @@ impl<'de> Deserialize<'de> for LspConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct LanguageServerConfig {
     pub command: PathBuf,
     pub args: Vec<String>,
     /// Passed verbatim as the `initializationOptions` of the handshake.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub initialization_options: Option<serde_json::Value>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WorkspaceConfig {
     /// Where this workspace keeps its local runtime state, normally
@@ -236,9 +274,12 @@ pub struct WorkspaceConfig {
     pub state: PathBuf,
     /// On Windows, the OS-known-folder boundary beneath which durable plugin
     /// state may be created. Omission keeps the full-ancestry durability path.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state_anchor: Option<WorkspaceStateAnchor>,
     /// Deprecated spelling of the top-level `mode`, kept so existing files
-    /// still choose the mode they always did.
+    /// still choose the mode they always did. Never written: [`Config::to_yaml`]
+    /// folds it into the top-level `mode`.
+    #[serde(skip_serializing)]
     pub mode: Option<LegacyWorkspaceMode>,
     pub session_strip: SessionStripVisibility,
     /// Minutes a clean host with no client or wait request remains alive.
@@ -246,7 +287,7 @@ pub struct WorkspaceConfig {
     pub idle_retirement_minutes: usize,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceStateAnchor {
     Profile,
@@ -255,7 +296,7 @@ pub enum WorkspaceStateAnchor {
 
 /// What a launch provides: editing with no workspace, a workspace, or a
 /// workspace kept alive in a persistent session.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunMode {
     Editor,
@@ -282,7 +323,7 @@ impl From<LegacyWorkspaceMode> for RunMode {
 }
 
 /// Visibility of the running persistent-session navigation row.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStripVisibility {
     #[default]
@@ -326,7 +367,7 @@ impl fmt::Display for RunMode {
 /// leaves directories in name order instead of pretending otherwise; a
 /// modification time means the same thing for both, so a time order applies to
 /// both.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExplorerSort {
     #[default]
@@ -381,7 +422,7 @@ impl fmt::Display for ExplorerSort {
 }
 
 /// The character used for one indentation level in editing commands.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IndentStyle {
     #[default]
@@ -409,7 +450,7 @@ impl fmt::Display for IndentStyle {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EditorConfig {
     pub grammar: GrammarKind,
@@ -492,7 +533,7 @@ pub struct EditorConfig {
     pub auto_close_terminal: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ThemeDefinition {
     pub background: String,
@@ -501,10 +542,12 @@ pub struct ThemeDefinition {
     /// Visible whitespace markers. An omitted value is derived one small step
     /// away from `background`, preserving custom themes written before the
     /// role existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub whitespace: Option<String>,
     /// Ordinary buffer text while `goto-word` labels are active. An omitted
     /// value uses `muted`, preserving themes written before jump dimming had
     /// its own role.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_text_muted: Option<String>,
     pub accent: String,
     /// Command names offered in the command palette. An omitted value uses
@@ -512,52 +555,68 @@ pub struct ThemeDefinition {
     /// colour for the palette and for the pane and overlay borders that also
     /// read `accent`. Naming it separates the two: a palette listing what can
     /// be run is not a frame around a pane, and a theme is entitled to say so.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Normal-mode caret colour. An omitted value uses `accent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_normal: Option<String>,
     /// Insert-mode caret colour. An omitted value uses `error`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_insert: Option<String>,
     /// Replace-mode caret colour. An omitted value uses Runyte's neon green,
     /// or neon magenta when another mode already uses green.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_replace: Option<String>,
     /// Select-mode caret colour. An omitted value uses `warning`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_select: Option<String>,
     /// Command-mode caret colour. An omitted value uses `info`, which is the
     /// one semantic role the other three modes have not already claimed, so a
     /// theme written before command mode had a colour still distinguishes all
     /// four.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_command: Option<String>,
     /// Secondary carets in a multi-selection. An omitted value uses
     /// `foreground`, keeping them visible while the primary retains its mode colour.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_secondary: Option<String>,
     /// Directory entries in explorer buffers. An omitted value uses `accent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
     /// The `[file]` type cell in the Navigator, buffer list, and terminal
     /// list. An omitted value uses `foreground`: a file is the ordinary case.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_file: Option<String>,
     /// The `[explorer]` type cell. An omitted value uses `directory`, the
     /// colour an explorer already gives the directories it lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_explorer: Option<String>,
     /// The type cell of a generated buffer such as `[about]`, `[config]`, or
     /// `[help]`. An omitted value uses `muted`: these are the editor's own
     /// pages rather than documents someone is writing.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_generated: Option<String>,
     /// The `[scratch]` type cell. An omitted value uses `jump_label_primary`,
     /// which every theme already keeps distinct from its text colours.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_scratch: Option<String>,
     /// The `[terminal]` type cell. An omitted value uses `change_added`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_terminal: Option<String>,
     pub selection: String,
     /// Primary and ordinary Select-mode ranges. An omitted value uses
     /// `selection`, preserving custom themes written before this field existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_primary: Option<String>,
     /// Background for non-contiguous fuzzy-grep match characters. An omitted
     /// value uses `selection`, so existing themes agree with secondary search
     /// selections.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fuzzy_match_secondary: Option<String>,
     /// Background for a contiguous fuzzy-grep substring. An omitted value uses
     /// `selection_primary`, so existing themes agree with the primary search
     /// selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fuzzy_match_primary: Option<String>,
     /// Compatibility-only status ground. Both bundled frontends deliberately
     /// render the global status line on `background`, but this public field is
@@ -570,14 +629,17 @@ pub struct ThemeDefinition {
     /// Warning notifications. An omitted value takes the fixed default from
     /// `ThemeDefinition::default`; an explicit null falls back to
     /// `change_modified`, then terminal yellow.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
     /// Informational notifications. An omitted value takes the fixed default
     /// from `ThemeDefinition::default`; an explicit null falls back to
     /// `change_added`, then terminal green.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub info: Option<String>,
     /// A one-key `goto-word` label, or the remaining key after narrowing. An
     /// omitted value uses `error`, preserving themes written before mixed
     /// labels existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_label_immediate: Option<String>,
     /// The leading character of a `goto-word` jump label, which is the one
     /// people aim at, so it carries the stronger of the two colours.
@@ -592,11 +654,14 @@ pub struct ThemeDefinition {
     /// palette; the bundled themes name a colour that belongs to theirs.
     /// `change_modified` and `change_removed` follow the same rule with
     /// magenta and red.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub change_added: Option<String>,
     /// Gutter mark for a line whose content differs from the staged one.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub change_modified: Option<String>,
     /// Gutter mark for lines that were removed, drawn against the row that
     /// closed over them.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub change_removed: Option<String>,
     /// Line background for a line only the right side of a side-by-side diff
     /// has. Distinct from `change_added`, which is a gutter mark against
@@ -606,17 +671,21 @@ pub struct ThemeDefinition {
     /// `ThemeDefinition::default`. An explicit null leaves the line unfilled
     /// and lets the gutter bar carry the difference on its own;
     /// `diff_removed` and `diff_changed` follow the same rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_added: Option<String>,
     /// Line background for a line only the left side of a diff has.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_removed: Option<String>,
     /// Line background for a line that answers to a different line on the
     /// other side.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_changed: Option<String>,
     /// Per-scope syntax colours, keyed by the names in `syntax::SCOPES`.
     /// Unlisted scopes fall back to the theme foreground.
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_sorted")]
     pub syntax: HashMap<String, String>,
     /// Optional ANSI slot overrides; unknown names are rejected on resolution.
+    #[serde(serialize_with = "serialize_sorted")]
     pub terminal: HashMap<String, String>,
 }
 
@@ -1195,6 +1264,21 @@ impl Config {
         Ok(source)
     }
 
+    /// The whole effective configuration as a YAML document, built-in themes
+    /// and language servers included.
+    ///
+    /// Maps are written in key order so the same configuration always
+    /// produces the same text. Reading the document back yields this
+    /// configuration again; comments and formatting of any file it came from
+    /// are not carried over.
+    /// The deprecated `workspace.mode` is written as the top-level `mode` it
+    /// selects.
+    pub fn to_yaml(&self) -> Result<String> {
+        let mut config = self.clone();
+        config.mode = Some(self.mode());
+        serde_yaml::to_string(&config).context("failed to serialize configuration")
+    }
+
     /// Merge additive built-ins after deserializing a user configuration.
     ///
     /// Kept as one seam so validation performed by lossless setting writes
@@ -1551,7 +1635,8 @@ pub fn config_root_for(path: &Path, launch_directory: &Path) -> PathBuf {
         .to_path_buf()
 }
 
-fn default_config_path() -> Option<PathBuf> {
+/// The per-user configuration file read when no `--config` is given.
+pub fn default_config_path() -> Option<PathBuf> {
     default_config_root().map(|root| root.join("config.yaml"))
 }
 
@@ -1630,6 +1715,105 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn written_yaml_folds_the_legacy_mode_and_keeps_indentation_rule_order() {
+        let config: Config = serde_yaml::from_str(
+            "workspace:\n  mode: persistent\nindentation:\n  languages:\n    rust:\n      tab_width: 2\n  files:\n    'src/**':\n      indent: tabs\n    '*.rs':\n      tab_width: 8\n",
+        )
+        .unwrap();
+
+        let text = config.to_yaml().unwrap();
+        assert!(text.starts_with("mode: mux\n"), "{text}");
+        assert!(!text.contains("persistent"), "{text}");
+        let written: Config = serde_yaml::from_str(&text).unwrap();
+        assert_eq!(written.mode(), RunMode::Mux);
+        assert!(written.deprecation_warnings().is_empty());
+        assert_eq!(written.indentation.languages["rust"].tab_width, Some(2));
+        let patterns: Vec<_> = written
+            .indentation
+            .files
+            .iter()
+            .map(|rule| rule.pattern.as_str())
+            .collect();
+        assert_eq!(patterns, ["src/**", "*.rs"]);
+        assert_eq!(
+            written.indentation.files[0].values.indent,
+            Some(IndentStyle::Tabs)
+        );
+        assert_eq!(written.indentation.files[1].values.tab_width, Some(8));
+        assert_eq!(written.to_yaml().unwrap(), text);
+    }
+
+    #[test]
+    fn written_yaml_reads_back_as_the_same_configuration() {
+        let source = "\
+plugins:
+  - id: sample
+    executable: /missing
+    enabled: true
+    settings:
+      nested: [true, 12, {text: 'λ'}]
+editor:
+  tab_width: 2
+  explorer_sort: modified_descending
+workspace:
+  state_anchor: local-app-data
+lsp:
+  markdown:
+    command: marksman
+    args: [server]
+    initialization_options: {a: 1}
+keys:
+  leader: Ctrl-x
+theme: mine
+themes:
+  mine:
+    accent: '#123456'
+    syntax:
+      keyword: '#abcdef'
+      comment: '#fedcba'
+";
+        let config = serde_yaml::from_str::<Config>(source)
+            .unwrap()
+            .with_builtin_defaults();
+        let written = config.to_yaml().unwrap();
+        let reread = serde_yaml::from_str::<Config>(&written)
+            .unwrap()
+            .with_builtin_defaults();
+
+        assert_eq!(reread.to_yaml().unwrap(), written);
+        assert_eq!(reread.lsp.servers, config.lsp.servers);
+        assert!(reread.lsp.servers.contains_key("rust"));
+        assert_eq!(reread.plugins, config.plugins);
+        assert_eq!(reread.keys, config.keys);
+        assert_eq!(reread.themes, config.themes);
+        assert_eq!(
+            reread.editor.explorer_sort,
+            ExplorerSort::ModifiedDescending
+        );
+        assert_eq!(
+            reread.workspace.state_anchor,
+            Some(WorkspaceStateAnchor::LocalAppData)
+        );
+        assert!(!written.contains("servers:"), "{written}");
+        assert!(written.contains("keyword: '#abcdef'"), "{written}");
+        assert!(
+            written.find("comment:").unwrap() < written.find("keyword:").unwrap(),
+            "maps are written in key order"
+        );
+    }
+
+    #[test]
+    fn written_yaml_names_the_default_theme_and_omits_an_absent_keys_section() {
+        let written = Config::default().to_yaml().unwrap();
+        assert!(
+            written.contains(&format!("\ntheme: {DEFAULT_THEME}\n")),
+            "{written}"
+        );
+        assert!(!written.contains("\nkeys:"), "{written}");
+        assert!(!written.contains(": null"), "{written}");
     }
 
     #[test]

@@ -7,6 +7,10 @@
 //! scalar must leave comments, unknown fields, ordering, quoting elsewhere,
 //! and line endings alone. Documents using YAML features that cannot be
 //! patched with that guarantee are rejected before any file is written.
+//!
+//! [`write_config`] is the one exception: it writes a whole new document
+//! from the effective configuration, which is why it refuses to replace an
+//! existing file unless asked to.
 
 use std::{
     collections::HashSet,
@@ -949,6 +953,8 @@ pub enum SettingError {
     },
     InvalidYaml(String),
     InvalidConfig(String),
+    /// A whole-document write would have replaced a file without being asked.
+    AlreadyExists(PathBuf),
     Io {
         operation: &'static str,
         path: PathBuf,
@@ -972,6 +978,7 @@ impl fmt::Display for SettingError {
             ),
             Self::InvalidYaml(message) => write!(formatter, "invalid YAML: {message}"),
             Self::InvalidConfig(message) => write!(formatter, "invalid Runyte config: {message}"),
+            Self::AlreadyExists(path) => write!(formatter, "{} already exists", path.display()),
             Self::Io {
                 operation,
                 path,
@@ -1026,6 +1033,27 @@ pub fn persist_setting(
     }
     atomic_write(&target, patched.as_bytes())?;
     Ok(updated)
+}
+
+/// Write `config` as a complete YAML document at `path`.
+///
+/// An existing file, or a link to one, is left alone unless `replace` is set.
+/// When it is, a symlink's target is replaced and the link remains intact, as
+/// [`persist_setting`] does. The document is read back before anything is
+/// written, so a file this produces is one the loader accepts.
+pub fn write_config(path: &Path, config: &Config, replace: bool) -> Result<(), SettingError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) if !replace => return Err(SettingError::AlreadyExists(path.to_path_buf())),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(io_error("inspect", path, source)),
+    }
+    let document = config
+        .to_yaml()
+        .map_err(|error| SettingError::InvalidConfig(format!("{error:#}")))?;
+    parse_config(&document)?;
+    let target = resolve_write_target(path)?;
+    atomic_write(&target, document.as_bytes())
 }
 
 fn parse_config(source: &str) -> Result<Config, SettingError> {
@@ -2209,6 +2237,43 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&target).unwrap(),
             "editor:\n  soft_wrap: true\n"
+        );
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_config_refuses_a_link_and_replaces_its_target_when_forced() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = TempDir::new();
+        let target = directory.path("actual.yaml");
+        let link = directory.path("config.yaml");
+        fs::write(&target, "# mine\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut config = Config::default().with_builtin_defaults();
+        config.editor.tab_width = 7;
+
+        let error = write_config(&link, &config, false).unwrap_err();
+        assert!(matches!(error, SettingError::AlreadyExists(ref path) if *path == link));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "# mine\n");
+
+        write_config(&link, &config, true).unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            parse_config(&fs::read_to_string(&target).unwrap())
+                .unwrap()
+                .editor
+                .tab_width,
+            7
         );
         assert_eq!(
             fs::metadata(target).unwrap().permissions().mode() & 0o777,
