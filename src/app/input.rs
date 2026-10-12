@@ -4694,11 +4694,20 @@ impl App {
             Command::GotoWord => self.label_visible_words(),
             Command::ToggleSoftWrap => {
                 self.config.editor.soft_wrap = !self.config.editor.soft_wrap;
-                self.status(if self.config.editor.soft_wrap {
-                    "soft wrap enabled"
+                let mut message = if self.config.editor.soft_wrap {
+                    "soft wrap enabled".to_owned()
                 } else {
-                    "soft wrap disabled"
-                });
+                    "soft wrap disabled".to_owned()
+                };
+                if self.config.editor.always_wrap_rendered_markdown
+                    && self.active_buffer().markdown_render_source().is_some()
+                    && self.pane_soft_wrap(self.active_pane)
+                {
+                    message.push_str(
+                        "; rendered Markdown stays wrapped (always_wrap_rendered_markdown)",
+                    );
+                }
+                self.status(message);
             }
             Command::ToggleWhitespace => {
                 self.config.editor.render_whitespace = !self.config.editor.render_whitespace;

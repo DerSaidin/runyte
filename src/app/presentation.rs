@@ -150,7 +150,7 @@ impl App {
         diff_projection(&self.diffs, pane_id)
     }
 
-    /// Whether a pane must ignore the configured soft wrap.
+    /// Effective wrapping for this pane, including the rendered Markdown override.
     ///
     /// Alignment is line-based, so a wrapped line takes a different number of
     /// screen rows on each side and the two views drift apart while still
@@ -165,7 +165,11 @@ impl App {
         // logical line, so one minified line is one pass over the whole file
         // for every frame it is on screen.
         let viable = buffer.is_none_or(Buffer::soft_wrap_viable);
-        self.config.editor.soft_wrap && self.diff_session(pane_id).is_none() && viable
+        let markdown_override = self.config.editor.always_wrap_rendered_markdown
+            && buffer.is_some_and(|buffer| buffer.markdown_render_source().is_some());
+        (self.config.editor.soft_wrap || markdown_override)
+            && self.diff_session(pane_id).is_none()
+            && viable
     }
 
     /// Requests current alignment for each live diff and settles where both

@@ -434,6 +434,8 @@ pub struct EditorConfig {
     /// row.
     pub explorer_details: bool,
     pub soft_wrap: bool,
+    /// Wrap rendered Markdown regardless of `soft_wrap`; false follows that setting.
+    pub always_wrap_rendered_markdown: bool,
     /// Draw visible markers for spaces, tabs, and line terminators.
     pub render_whitespace: bool,
     /// Maximum text width of the centred viewport used by `:zen`.
@@ -1000,6 +1002,7 @@ impl Default for EditorConfig {
             explorer_sort: ExplorerSort::Name,
             explorer_details: false,
             soft_wrap: false,
+            always_wrap_rendered_markdown: true,
             render_whitespace: false,
             zen_width: 100,
             hard_wrap_width: 80,

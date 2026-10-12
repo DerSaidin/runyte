@@ -8,7 +8,7 @@ const SOURCE: &str =
 
 fn rendered(source: &str) -> App {
     let mut config = Config::default();
-    config.editor.soft_wrap = true;
+    config.editor.soft_wrap = false;
     config.editor.line_numbers = false;
     config.editor.scroll_offset = 0;
     let mut app = App::new(config, None).unwrap();
@@ -74,7 +74,7 @@ fn markdown_tables_render_wrapped_cells_with_styles_and_stable_text() {
     }
     assert_eq!(app.active_buffer().revision(), revision);
     assert_eq!(app.active_buffer().to_string(), text);
-    app.config.editor.soft_wrap = false;
+    app.config.editor.always_wrap_rendered_markdown = false;
     let view = prepare(&mut app, 80, 20);
     assert!(
         visible(&app, &view, 0)
@@ -373,4 +373,138 @@ fn markdown_tables_page_motion_counts_rules_and_window_motion_skips_them() {
     prepare(&mut app, 30, 4);
     app.motion(Motion::WindowBottom);
     assert_eq!(cursor(&app).row, 2);
+}
+
+#[test]
+fn rendered_markdown_wrap_override_keeps_general_toggle_and_status_independent() {
+    for always in [false, true] {
+        for general in [false, true] {
+            let mut config = Config::default();
+            config.editor.soft_wrap = general;
+            config.editor.always_wrap_rendered_markdown = always;
+            config.editor.line_numbers = false;
+            let mut app = App::new(config, None).unwrap();
+            seed(&mut app, "alpha beta gamma delta epsilon");
+            assert_eq!(app.pane_soft_wrap(0), general);
+            press(&mut app, '?');
+            assert_eq!(app.pane_soft_wrap(0), general || always);
+            assert_eq!(app.config.editor.soft_wrap, general);
+            let view = prepare(&mut app, 12, 10);
+            assert_eq!(app.snapshot(&view).status.soft_wrap, general);
+            assert_eq!(
+                view.pane(0)
+                    .unwrap()
+                    .rows
+                    .iter()
+                    .filter(|row| row.document_row == Some(0))
+                    .count()
+                    > 1,
+                general || always
+            );
+            for stroke in [' ', 'p', 's'] {
+                press(&mut app, stroke);
+            }
+            assert_eq!(app.config.editor.soft_wrap, !general);
+            assert_eq!(app.pane_soft_wrap(0), !general || always);
+            assert_eq!(app.status.contains("always_wrap_rendered_markdown"), always);
+            let view = prepare(&mut app, 12, 10);
+            assert_eq!(app.snapshot(&view).status.soft_wrap, !general);
+            press(&mut app, '?');
+            assert_eq!(app.config.editor.soft_wrap, !general);
+            assert_eq!(app.pane_soft_wrap(0), !general);
+            assert_eq!(text(&app), "alpha beta gamma delta epsilon");
+        }
+    }
+}
+
+#[test]
+fn rendered_markdown_wrap_setting_previews_rolls_back_and_persists() {
+    let path = temporary("markdown-wrap-setting.yaml");
+    fs::write(&path, "# retained\neditor:\n  soft_wrap: false\n").unwrap();
+    let (config, _) = Config::load(Some(&path)).unwrap();
+    assert!(config.editor.always_wrap_rendered_markdown);
+    let mut app = App::new(config, None).unwrap();
+    app.note_loaded_config(&path);
+    seed(&mut app, "alpha beta gamma delta epsilon");
+    press(&mut app, '?');
+    for save in [false, true] {
+        app.open_setting_values(SettingId::EditorAlwaysWrapRenderedMarkdown);
+        let disabled = app
+            .list_actions
+            .iter()
+            .position(|action| {
+                matches!(
+                    action,
+                    ListAction::SettingValue {
+                        value: SettingValue::Boolean(false),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        app.list.as_mut().unwrap().selected = disabled;
+        app.preview_selected_setting_value();
+        assert!(!app.pane_soft_wrap(0));
+        key(
+            &mut app,
+            if save {
+                KeyCode::Enter
+            } else {
+                KeyCode::Escape
+            },
+            Modifiers::NONE,
+        );
+        assert_eq!(app.pane_soft_wrap(0), !save);
+        let (loaded, _) = Config::load(Some(&path)).unwrap();
+        assert_eq!(loaded.editor.always_wrap_rendered_markdown, !save);
+        assert!(!loaded.editor.soft_wrap);
+    }
+    assert!(fs::read_to_string(&path).unwrap().contains("# retained"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn markdown_file_source_stays_unwrapped_while_its_page_wraps() {
+    let path = temporary("wrap-source.md");
+    fs::write(&path, "alpha beta gamma delta epsilon").unwrap();
+    let mut app = App::new(Config::default(), Some(path.clone())).unwrap();
+    assert!(!app.pane_soft_wrap(0));
+    press(&mut app, '?');
+    assert!(app.active_buffer().markdown_render_source().is_some());
+    assert!(app.pane_soft_wrap(0));
+    press(&mut app, '?');
+    assert!(!app.pane_soft_wrap(0));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn rendered_markdown_override_does_not_wrap_comparison_panes() {
+    let mut app = rendered("alpha beta gamma delta epsilon");
+    prepare(&mut app, 80, 20);
+    app.execute_command("diff-this").unwrap();
+    press(&mut app, '?');
+    app.execute_command("diff-this").unwrap();
+    assert_eq!(app.diffs.len(), 1);
+    for pane in app.panes.keys().copied() {
+        assert!(!app.pane_soft_wrap(pane));
+    }
+    let rendered_pane = app
+        .panes
+        .iter()
+        .find_map(|(pane, view)| {
+            app.buffers[view.buffer]
+                .markdown_render_source()
+                .is_some()
+                .then_some(*pane)
+        })
+        .unwrap();
+    app.active_pane = rendered_pane;
+    for stroke in [' ', 'p', 's'] {
+        press(&mut app, stroke);
+    }
+    assert!(!app.status.contains("stays wrapped"));
+    assert!(!app.pane_soft_wrap(rendered_pane));
+    app.execute_command("diff-off").unwrap();
+    app.config.editor.soft_wrap = false;
+    assert!(app.pane_soft_wrap(rendered_pane));
 }
