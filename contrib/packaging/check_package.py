@@ -25,7 +25,7 @@ def check_layout(directory, repository):
             'Runyte.icns', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md',
             'assets/fonts/jetbrains-mono/README.md'}}
     else:
-        expected = licenses | {'runyte', 'runed', 'README.md', 'LICENSE', 'NOTICE',
+        expected = licenses | {'runyte', 'runed', 'README.md', 'INSTALLATION.md', 'LICENSE', 'NOTICE',
             'THIRD_PARTY_NOTICES.md', 'config.example.yaml', 'docs/user-guide.md',
             'contrib/packaging/package.py', 'contrib/packaging/README.md'}
         expected |= {'contrib/packaging/icons/' + name for name in files(repository / 'contrib/packaging/icons')}

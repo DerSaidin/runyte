@@ -41,20 +41,19 @@ consistent keybindings, consistent themes, and minimum configuration.
 ## Editions
 
 Both editions use the same editor, keymap, configuration, plugins and persistent
-sessions. The desktop edition also runs in a terminal; `--window` opens its
-window. Every client and host in a persistent session must use the same Runyte
-version, regardless of edition.
+sessions. Choose the desktop edition if you want `--window`; it also runs in a
+terminal.
 
-| Terminal edition | Desktop edition |
-| --- | --- |
-| **Includes:** text editor, terminal UI, Git, language services, PTYs, plugins and MCP | **Includes:** everything in the terminal edition plus a GPUI window, native clipboard, image/PDF viewing and document preview |
-| **Executable:** about 56.1 MB | **Executable:** about 106.8 MB |
-| **Platforms:** Linux, macOS and Windows 11 | **Platforms:** Linux and macOS; no Windows window yet |
-| **Requirements:** a terminal; source builds need Rust 1.88 and a C compiler | **Requirements:** Vulkan on Linux; prebuilt Linux archives need glibc 2.39 or newer; macOS 11 or later. Poppler is an optional PDF fallback |
-| **Install:** [curl, release archive or crates.io](#installation) | **Install:** Linux desktop release archive, or [build the desktop edition](#desktop-edition); macOS app packaging is described in the [packaging guide](contrib/packaging/README.md) |
+| Edition | Includes | Platforms | Installation |
+| --- | --- | --- | --- |
+| Terminal | Editor, terminal UI, Git, language services, integrated terminals, plugins and MCP | Linux, macOS, Windows 11 | [Install script, release archive or Cargo](#installation) |
+| Desktop | Everything above, plus a window, native clipboard, image/PDF viewing and document preview | Linux and macOS | [Linux release archive or source build](INSTALLATION.md#desktop-edition) |
 
-Sizes are stripped Linux x86-64 release measurements; see the
-[measurement record](context/reference/desktop-edition.md#editions-phase-4-one-desktop-executable-2026-10-10).
+**Both distributions provide an executable named `runyte`.** The Cargo build
+name `runyte-desktop` distinguishes the desktop executable in `target/`;
+`runyte-native` is an internal library, not another program to install.
+See [requirements and package names](INSTALLATION.md#choose-an-edition).
+
 The platform table below describes the terminal edition.
 
 | CPU    | System     | Automated tests | Prebuilt release | Hands-on use |
@@ -180,11 +179,10 @@ Runyte recognizes when it is launched as `runed`, so the symbolic link
 (e.g. `ln -s /path/to/runyte runed`) alone is enough to select editor mode,
 just like `runyte --editor`.
 
-Use it wherever a program asks for an editor, and with `sudoedit` for system
-files:
+Use `runed` for standalone edits and with `sudoedit` for system files. To edit
+inside an existing persistent session, use the [`--wait` setup](#post-install-setup).
 
 ```sh
-export EDITOR=runed
 export SUDO_EDITOR=runed
 sudoedit /etc/fstab
 ```
@@ -227,260 +225,86 @@ or the [application authoring guide](docs/plugins/authoring.md).
 
 ## Installation
 
+Choose an edition above. [INSTALLATION.md](INSTALLATION.md) covers dependencies,
+platform-specific instructions, source builds, shell setup and updates.
+
 ### Easy install
 
-Install or update to the latest release on Linux or macOS:
+Install or update the **terminal edition** on Linux or macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/runyte/runyte/main/install.sh | sh
 ```
 
-The [installer](install.sh) selects the x86-64 or ARM64 archive, verifies its
-SHA-256 checksum, and installs to `~/.local/bin/runyte` without sudo. Run the
-same command again to update. Add `~/.local/bin` to your `PATH` if needed.
-Linux requires glibc 2.35 or newer; Alpine/musl is unsupported. See the
-[installation guide](docs/user-guide.md#install-and-update-with-curl) for
-requirements, script review, version selection, and custom install locations.
-
-On Windows, download the x86-64 archive from
-[GitHub Releases](https://github.com/runyte/runyte/releases), or install through cargo.
+The script verifies the release checksum and installs `runyte` and `runed` in
+`~/.local/bin`, without sudo. Add that directory to `PATH` if needed. Linux
+archives require glibc 2.35 or newer. For Windows, use the x86-64 ZIP from
+[GitHub Releases](https://github.com/runyte/runyte/releases) and follow the
+[Windows instructions](INSTALLATION.md#windows).
 
 ### Install through cargo
 
-Installing from crates.io requires Rust 1.88 or newer and a C compiler:
+Install the **terminal edition** with Rust 1.88 or newer and a C compiler:
 
 ```sh
 cargo install runyte --locked
 ```
 
-### Build from source
-
-To build from a clone:
-
-```sh
-cargo build --release
-./target/release/runyte README.md
-```
-
 ### Desktop edition
 
-The native window is built from this checkout with GPUI, Zed's Rust UI
-framework. Install [Rust through rustup](https://rustup.rs/) and the platform
-dependencies below before building. Use a current stable Rust toolchain for
-the desktop dependency graph (Rust 1.92 or later).
+Download the Linux **desktop** archive for your CPU from
+[GitHub Releases](https://github.com/runyte/runyte/releases), then follow the
+[desktop installation steps](INSTALLATION.md#desktop-edition). Linux desktop
+archives require glibc 2.39 or newer and a working Vulkan driver. macOS desktop
+builds are available as unsigned bundles built from source.
 
-Native builds embed JetBrainsMono Nerd Font (Medium, Medium Italic, Bold, and
-Bold Italic); no system font installation is needed. The font is redistributed
-under SIL OFL 1.1 with its [licenses and attribution](licenses/jetbrains-mono/README.md).
-Terminal builds continue to use the font selected by your terminal emulator.
-Set `editor.font_size` in `Space o o` to choose the window's starting size
-(default 15 logical pixels). Ctrl-plus/minus adjust only the current window;
-reopening it restores the configured size. Ctrl-Shift-c copies the selection
-to the system clipboard, and Ctrl-Shift-v pastes text into the active input,
-including integrated terminals.
-On macOS, Cmd-c copies, and Cmd-v also pastes clipboard text;
-the Control-Shift shortcuts remain available.
-
-**macOS**
-
-Install [Xcode](https://apps.apple.com/us/app/xcode/id497799835), launch it once,
-and install its macOS components. GPUI compiles Metal shaders, so the full
-Xcode installation is required in addition to the command-line tools. With
-[Homebrew](https://brew.sh/) installed:
+The desktop executable supports both frontends:
 
 ```sh
-xcode-select --install  # If the command-line tools are not installed yet.
-sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-sudo xcodebuild -license
-xcodebuild -downloadComponent MetalToolchain
-brew install cmake pkgconf poppler
+runyte --window --mux  # window with a persistent session
+runyte --mux           # terminal frontend, same persistent sessions
 ```
 
-The Metal Toolchain may need a separate download even with Xcode installed.
-If the build reports `cannot execute tool metal due to missing Metal Toolchain`,
-run the `xcodebuild -downloadComponent MetalToolchain` command above, then retry
-the build.
+### Build from source
 
-See the [upstream macOS build prerequisites](https://zed.dev/docs/development/macos)
-if Xcode is installed in a different location. Poppler is available through
-[Homebrew's formula](https://formulae.brew.sh/formula/poppler).
-
-**Debian / Ubuntu**
+After installing the [build dependencies](INSTALLATION.md#build-from-source),
+choose the executable to build:
 
 ```sh
-sudo apt update
-sudo apt install build-essential pkg-config cmake clang \
-  libfontconfig1-dev libfreetype6-dev libxcb1-dev libx11-xcb-dev \
-  libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libssl-dev \
-  libvulkan1 mesa-vulkan-drivers poppler-utils
+cargo build --release --locked                    # target/release/runyte
+cargo build --release --locked -p runyte-desktop  # target/release/runyte-desktop
 ```
 
-**Fedora**
-
-```sh
-sudo dnf install gcc gcc-c++ pkgconf-pkg-config cmake clang \
-  fontconfig-devel freetype-devel libxcb-devel libX11-devel \
-  libxkbcommon-devel libxkbcommon-x11-devel wayland-devel openssl-devel \
-  vulkan-loader mesa-vulkan-drivers poppler-utils
-```
-
-**Arch Linux**
-
-```sh
-sudo pacman -Syu --needed base-devel pkgconf cmake clang fontconfig freetype2 \
-  libxcb libx11 libxkbcommon libxkbcommon-x11 wayland openssl \
-  vulkan-icd-loader poppler
-```
-
-Linux also needs a working Vulkan driver for the GPU. Debian/Ubuntu and Fedora
-commands above include Mesa's drivers; NVIDIA installations should use their
-distribution's matching NVIDIA driver. On Arch, install `vulkan-radeon` for AMD
-or `vulkan-intel` for Intel, for example `sudo pacman -S --needed vulkan-radeon`.
-For other distributions, consult the
-[upstream Linux dependency instructions](https://zed.dev/docs/development/linux).
-
-Native PDF viewing includes Hayro 0.8 for rendering and text selection.
-Poppler is an optional fallback for documents Hayro cannot handle; its
-`pdfinfo`, `pdftoppm`, and `pdftotext` utilities are neither linked nor bundled.
-Hayro uses embedded fonts and built-in standard substitutes, without system
-font lookup. Install the fallback tools with `brew install poppler` on macOS,
-`sudo apt install poppler-utils` on Debian/Ubuntu,
-`sudo dnf install poppler-utils` on Fedora, or
-`sudo pacman -S --needed poppler` on Arch. Fedora packages these tools in
-[`poppler-utils`](https://packages.fedoraproject.org/pkgs/poppler/poppler-utils/).
-Verify that all three are available in the same shell used to launch Runyte:
-
-```sh
-command -v pdfinfo pdftoppm pdftotext
-```
-
-Then build and open a window:
-
-```sh
-cargo run -p runyte-desktop -- --window
-cargo run -p runyte-desktop -- --window --mux
-cargo run -p runyte-desktop -- --window --editor /path/to/file
-```
-
-For a desktop launcher and the Runyte icon on Linux (required by Wayland):
-
-```sh
-python3 contrib/packaging/package.py linux --binary target/debug/runyte-desktop
-```
-
-Register again if you move the binary or switch to `target/release/runyte-desktop`.
-On macOS, use the [native desktop packaging guide](contrib/packaging/README.md)
-to create a local `Runyte.app` with the same icon and bundled font notices.
-
-The [desktop packaging guide](contrib/packaging/README.md) packages one editor
-executable with its internal PDF and preview helpers. Linux x86-64 and ARM64 desktop
-archives require Ubuntu 24.04 / glibc 2.39 or newer. macOS signed distribution
-is prepared separately. The curl installer and crates.io install the terminal
-edition.
-
-Workspace source builds can fetch the pinned Blitz/Taffy Git dependencies while
-Cargo resolves the shared lock, even when only the terminal package is selected.
-The terminal package does not compile or link them; the published crates.io
-package has no desktop dependencies.
-
-[Document preview](crates/runyte-preview/README.md) is included in the desktop
-edition. `:preview` renders selected text,
-or the whole buffer with no selection, including unsaved edits. It supports
-Markdown, static HTML, SVG, JSON, YAML, highlighted source and plain text.
-Escape returns to source. Existing `?`, `:render`, and `:markdown` are unchanged.
-
-The window keeps Runyte's cell layout, themes, command palette, key hints,
-configured bindings, splits, and integrated terminals. It adds no toolbars.
-Open an image or PDF with `:open`, the explorer, the directory tree, or a
-startup filename to view it inside a pane. On PDFs, `j`/`k` select adjacent
-pages and `42gg` jumps to page 42. Escape opens the PDF's page buffer: move or
-search to a page and press Enter to display it. Another Escape returns to the
-source directory; images return there directly. Escape first dismisses an
-open overlay or clears a media selection. `Space e` opens the source directory
-directly, with the file selected.
-
-In PDF and image previews, `q` also performs Escape's fit, clear-selection,
-and leave-preview action.
-
-`+`/`-` zoom, `z f` fits, and `z h/j/k/l` pans. Ctrl-wheel zooms at the pointer;
-middle-drag pans. Select PDF text with left-drag or image regions with
-Shift-drag, then `y` copies the selection.
-
-Animated GIF and WebP images play automatically while visible, respecting frame
-delays and loop counts. Selecting a region pauses that pane on the displayed
-frame; copying uses that frame, and clearing the selection resumes playback.
-
-Use `--window --mux` to create or attach to a persistent session. The window and
-terminal frontend share the same sessions and take turns attaching. `:detach`
-and the window close button leave the session running; session switching and
-quit fallback work as in the terminal frontend. Keep clients and hosts on the same Runyte version. Either edition can host
-a persistent session; a desktop client is needed for its window.
-
-The desktop window supports Linux and macOS; Windows is not implemented. macOS
-installation prerequisites are documented above, but the native frontend still
-needs hands-on macOS validation.
-
-See [native-window details and limits](docs/user-guide.md#desktop-edition).
-The normal terminal executable remains available without `--window`.
+Building does not install either executable. The [source installation
+steps](INSTALLATION.md#install-a-source-build) explain how to install the desktop
+build as `runyte`.
 
 ### Post-install setup
 
-Git features require `git` on `PATH`; language servers are installed separately.
+For Git and external-editor requests from Codex or Claude Code, set both
+variables in `~/.bashrc` or `~/.zshrc`:
 
-The [shell directory guide](docs/user-guide.md#change-the-shell-directory-on-exit)
-explains how `:quit-here` and both wrappers work.
-
-#### Linux and macOS
-
-On Linux and macOS, it is advised to set the following in your `~/.bashrc` or `~/.zshrc`:
 ```sh
-# To run it using ru instead of runyte ;)
-alias ru=runyte
-
-# To use runyte as the default editor, e.g. in git, Claude Code, Codex
 export EDITOR='runyte --wait'
 export VISUAL='runyte --wait'
-
-# To support :quit-here - quit to the directory selected in the file explorer
-function runyte() {
-    local runyte_tmp runyte_cwd runyte_exit
-    runyte_tmp="$(mktemp -t 'runyte-cwd.XXXXXX')" || return
-    command runyte --cwd-file "$runyte_tmp" "$@"
-    runyte_exit=$?
-    if [ "$runyte_exit" -eq 0 ] && IFS= read -r -d '' runyte_cwd < "$runyte_tmp"; then
-        [ -n "$runyte_cwd" ] && [ "$runyte_cwd" != "$PWD" ] && [ -d "$runyte_cwd" ] && builtin cd -- "$runyte_cwd"
-    fi
-    command rm -f -- "$runyte_tmp"
-    return "$runyte_exit"
-}
 ```
 
-Linux clipboard integration uses the first available of `wl-clipboard`, `xclip`,
-or `xsel`.
-
-#### Windows
-
-On Windows, in PowerShell, add `Set-Alias ru runyte` to your
-[`$PROFILE`](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_profiles)
-and start a new PowerShell session. To use `:quit-here` on Windows,
-save [runyte.ps1](contrib/runyte.ps1) in a stable local location and dot-source it from your PowerShell profile:
-```powershell
-. 'C:\Tools\Runyte\runyte.ps1'
-```
-The wrapper is tested with Windows PowerShell 5.1; PowerShell 7 has not been validated.
+Start `runyte --mux` (or `runyte --window --mux`) in your project, then run the
+agent in an integrated terminal. Its `Ctrl-g` edit opens in the parent
+persistent session; `:wbc` saves and closes the buffer so the agent resumes.
+Every client and host must use the same Runyte version. See [shell setup and
+source-build paths](INSTALLATION.md#shell-and-external-editor-setup) for details,
+Windows settings and optional `:quit-here` integration.
 
 ### First run
 
 ```sh
-runyte
-runyte .
-runyte src/main.rs
-runyte +120:8 src/app.rs
-runyte -a
-runyte -a /path/to/notes
+runyte --editor notes.md  # edit anywhere, without a workspace
+runyte --mux              # open a persistent session in a project
 ```
 
-Run `runyte --help` for the complete command-line interface.
+A workspace is a Git repository or a directory initialized with
+`runyte --init DIRECTORY`. Use `runyte --help` for all command-line options.
 
 ## Help
 

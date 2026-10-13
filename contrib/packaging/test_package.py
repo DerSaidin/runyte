@@ -28,7 +28,7 @@ class NativePackageTests(unittest.TestCase):
             self.assertEqual((moved / "runyte").read_bytes(), fixture.read_bytes())
             self.assertFalse((moved / "runyte-preview-helper").exists())
             self.assertEqual((moved / "runed").resolve(), moved / "runyte")
-            for name in ("licenses", "docs/user-guide.md", "THIRD_PARTY_NOTICES.md",
+            for name in ("licenses", "INSTALLATION.md", "docs/user-guide.md", "THIRD_PARTY_NOTICES.md",
                          "contrib/packaging/package.py", "contrib/packaging/icons/Runyte.icns"):
                 self.assertTrue((moved / name).exists(), name)
             desktop = package.install_linux(moved / "runyte", root / "data", refresh=False)

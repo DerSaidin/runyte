@@ -170,6 +170,10 @@ jobs:
             THIRD_PARTY_NOTICES.md \
             config.example.yaml \
             "$package_dir/"
+          # Historical tags predate the separate installation guide.
+          if [ -f INSTALLATION.md ]; then
+            install -m 0644 INSTALLATION.md "$package_dir/"
+          fi
           cp -R licenses "$package_dir/licenses"
           mkdir -p "$package_dir/docs"
           install -m 0644 docs/user-guide.md "$package_dir/docs/user-guide.md"
@@ -197,6 +201,9 @@ jobs:
           # runed it runs as runyte --editor.
           Copy-Item -LiteralPath "target/$env:TARGET/release/runyte.exe" -Destination (Join-Path $packageDir "runed.exe")
           Copy-Item -LiteralPath README.md, LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, config.example.yaml -Destination $packageDir
+          if (Test-Path -LiteralPath INSTALLATION.md) {
+            Copy-Item -LiteralPath INSTALLATION.md -Destination $packageDir
+          }
           Copy-Item -LiteralPath licenses -Destination $packageDir -Recurse
           New-Item -ItemType Directory -Path "$packageDir/docs" | Out-Null
           Copy-Item -LiteralPath docs/user-guide.md -Destination "$packageDir/docs/user-guide.md"

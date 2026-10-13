@@ -57,6 +57,7 @@ class DistributionToolsTests(unittest.TestCase):
                 self.assertEqual((stage / "Applications").readlink(), Path("/Applications"))
                 self.assertEqual((stage / "Runyte.app/Contents/MacOS/runed").readlink(), Path("runyte"))
                 self.assertTrue((stage / "README.md").is_file())
+                self.assertTrue((stage / "INSTALLATION.md").is_file())
                 output.write_bytes(b"mock disk image")
             with patch("package.subprocess.run", side_effect=create) as run:
                 package.disk_image(app, output)

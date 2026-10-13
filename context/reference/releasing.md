@@ -294,7 +294,7 @@ The tag workflow publishes these files, where `<version>` includes its leading
 - `SHA256SUMS`, covering all seven archives.
 
 Each terminal archive has one top-level directory named
-`runyte-terminal-MAJOR.MINOR.PATCH-<target>`. It contains the executable, `README.md`,
+`runyte-terminal-MAJOR.MINOR.PATCH-<target>`. It contains the executable, `README.md`, `INSTALLATION.md`,
 `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, the complete `licenses/`
 directory, and `config.example.yaml`. Linux archives are built on Ubuntu 22.04
 to retain the glibc 2.35 floor. The macOS executables are unsigned and are not
