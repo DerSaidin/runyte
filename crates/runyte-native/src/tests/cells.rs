@@ -145,6 +145,7 @@ fn document_preview_hides_source_cells_but_preserves_overlay_cells() {
             path: None,
             selection_only: false,
         },
+        palette: None,
     });
     frame.overlays.push(runyte::layout::Rect {
         x: 3,

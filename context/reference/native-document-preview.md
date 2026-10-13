@@ -20,7 +20,8 @@ change source text, selection, undo history or viewport. Existing `?`, `:render`
 and `:markdown` behavior remains separate.
 
 Shared state holds bounded, presentation-neutral text captures keyed by pane.
-Private bundled-client protocol version 77 carries captures and dismissals.
+Private bundled-client protocol version 77 carries captures and dismissals;
+version 79 adds the live `editor.preview_theme_colors` setting to editor frames.
 Native views own scroll, hit coordinates, selection and images. Blitz types exist only in the
 workspace library `crates/runyte-preview`, linked only into the desktop edition.
 The desktop executable dispatches `--helper preview` before editor startup; the
@@ -142,7 +143,8 @@ boundaries with spaces, so copied code may lose authored line breaks. Nested HTM
 scroll containers are not separately routed; document-level scrolling is wired.
 Complex CSS, SVG filters and full website compatibility are unproven. Markdown
 raw HTML is escaped, remote images are denied, and Syntect language coverage
-differs from the editor. Preview colors currently use a light document theme.
+differs from the editor. Generated pages follow the editor theme unless
+`editor.preview_theme_colors` is off; see [Theme colours](#theme-colours).
 Large captures are rejected with a useful message; a smaller selection can still
 be previewed. Automatic refresh, editing, trees, folding and export are absent.
 
@@ -254,7 +256,7 @@ interactive native attachment may use it. Attachment identity prevents delivery
 to a different workspace; capture generation rejects delayed requests after a
 refresh. The source buffer and its editing state remain untouched.
 
-Private protocol version 77 requires matching client and host binaries. Existing
+Private protocol version 79 requires matching client and host binaries. Existing
 sessions should be saved and stopped through a compatible client before upgrading;
 a window-only restart does not upgrade its retained host. Undismissed captures
 can still reopen on reattachment, but `q`, Escape and editing-key exits remove the
@@ -420,3 +422,45 @@ edge. Packages present only in the root graph are omitted.
 | `yoke-derive` | 0.8.4 | 0.8.2 |
 | `zerofrom` | 0.1.8 | 0.1.7 |
 | `zerofrom-derive` | 0.1.8 | 0.1.7 |
+
+## Theme colours
+
+`editor.preview_theme_colors` (default on) is carried live in each editor
+frame beside the resolved theme, like `editor.terminal_theme_colors`. The
+native frontend derives `document_preview::Palette` from that theme and sends
+it with every helper request, so switching theme or toggling the setting
+repaints open previews without recapturing. The palette takes part in the
+frontend's raster-cache match and the helper's retained-document identity;
+a raster painted in old colours is never a cache hit. It stays on screen only
+until its replacement arrives. Each reply says whether the helper themed the
+page; the native layer behind the raster, its link bar and key hints use the
+palette only for a themed page, so authored HTML that sets no background of
+its own still shows on white.
+
+The palette keeps the theme's background and foreground, steps surface,
+inline-code and border grounds off the background in the direction of its
+appearance, and takes links from `markup.link.text`, then `markup.link.url`,
+then `accent`; headings from `markup.heading`. A theme painting on the
+terminal's own ground uses the same fallback ground as the native window.
+Syntax colours are sent by Runyte scope name; the helper maps each onto
+TextMate selectors for Syntect and ignores names it does not know.
+
+Authored HTML and valid SVG keep their own colours: recolouring a page that
+styles itself, or a drawing made against white, would change what was
+written. `prefers-color-scheme` reports dark for a dark theme so such HTML can
+follow it. A broken SVG's diagnostic page is generated and is themed. With the
+setting off, generated pages are byte-for-byte the original light page.
+
+Coverage: `palette_follows_every_built_in_theme_ground_and_syntax` and
+`palette_prefers_link_and_heading_scopes_and_falls_back_for_terminal_grounds`
+in `src/document_preview.rs`; `preview_theme_setting_reaches_frames_live_without_recapturing`
+in `src/app/tests/document_preview.rs`; the frame round trip in
+`src/protocol/frame.rs`; the helper formatting tests in
+`crates/runyte-preview/src/format.rs`; `theme_change_rebuilds_the_retained_document`,
+`authored_html_answers_prefers_color_scheme_without_taking_the_theme` and
+`oversized_scope_lists_are_refused` in `crates/runyte-preview/src/lib.rs`;
+cache, wire and `authored_pages_keep_a_white_layer_under_a_themed_editor`
+tests in `crates/runyte-native/src/tests/preview.rs`; and
+`preview_pages_take_the_editor_theme_ground_or_stay_white` in
+`crates/runyte-desktop/tests/helpers.rs`, which renders every built-in theme
+through the real helper.

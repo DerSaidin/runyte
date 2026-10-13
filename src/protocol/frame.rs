@@ -203,6 +203,7 @@ impl EditorDamageFrame {
             || base.editor.geometry != next.editor.geometry
             || base.editor.theme != next.editor.theme
             || base.editor.terminal_theme_colors != next.editor.terminal_theme_colors
+            || base.editor.preview_theme_colors != next.editor.preview_theme_colors
             || base.editor.mode != next.editor.mode
             || base.editor.session_strip != next.editor.session_strip
             || base.editor.directory_tree != next.editor.directory_tree
@@ -350,6 +351,7 @@ impl TerminalDamageFrame {
             || base.editor.geometry != next.editor.geometry
             || base.editor.theme != next.editor.theme
             || base.editor.terminal_theme_colors != next.editor.terminal_theme_colors
+            || base.editor.preview_theme_colors != next.editor.preview_theme_colors
             || base.editor.mode != next.editor.mode
             || base.editor.session_strip != next.editor.session_strip
             || base.editor.directory_tree != next.editor.directory_tree
@@ -569,6 +571,7 @@ pub struct EditorSnapshot {
     pub geometry: FrameGeometry,
     pub theme: Theme,
     pub terminal_theme_colors: bool,
+    pub preview_theme_colors: bool,
     pub mode: Mode,
     pub directory_tree: Option<DirectoryTreeSnapshot>,
     pub panes: Vec<PaneSnapshot>,
@@ -582,6 +585,7 @@ impl From<core::EditorSnapshot> for EditorSnapshot {
             geometry: value.geometry.into(),
             theme: value.theme.into(),
             terminal_theme_colors: value.terminal_theme_colors,
+            preview_theme_colors: value.preview_theme_colors,
             mode: value.mode.into(),
             directory_tree: value.directory_tree.map(Into::into),
             panes: value.panes.into_iter().map(Into::into).collect(),
@@ -598,6 +602,7 @@ impl TryFrom<EditorSnapshot> for core::EditorSnapshot {
             geometry: value.geometry.into(),
             theme: value.theme.into(),
             terminal_theme_colors: value.terminal_theme_colors,
+            preview_theme_colors: value.preview_theme_colors,
             mode: value.mode.into(),
             directory_tree: value.directory_tree.map(TryInto::try_into).transpose()?,
             panes: value
@@ -1002,6 +1007,7 @@ mod tests {
                 geometry: FrameGeometry::default(),
                 theme: theme.into(),
                 terminal_theme_colors: true,
+                preview_theme_colors: true,
                 mode: Mode::Normal,
                 panes: vec![PaneSnapshot {
                     preview: None,
@@ -1089,6 +1095,22 @@ mod tests {
         next.editor.theme.terminal[1] = Color::Rgb(1, 2, 3);
         assert!(EditorDamageFrame::between(&base, &next).is_none());
         assert!(TerminalDamageFrame::between(&base, &next).is_none());
+    }
+
+    #[test]
+    fn preview_theme_setting_requires_complete_frames_and_round_trips() {
+        let base = terminal_frame(1, 1, 'x');
+        let mut next = base.clone();
+        next.id = FrameId::from_raw(2);
+        next.editor.preview_theme_colors = false;
+        assert!(EditorDamageFrame::between(&base, &next).is_none());
+        assert!(TerminalDamageFrame::between(&base, &next).is_none());
+        let wire = serde_json::to_vec(&next).unwrap();
+        let decoded: HostFrame = serde_json::from_slice(&wire).unwrap();
+        let core: crate::workspace::HostFrame = decoded.try_into().unwrap();
+        assert!(!core.editor.preview_theme_colors);
+        let wire = HostFrame::from(core);
+        assert!(!wire.editor.preview_theme_colors);
     }
 
     fn path_frame(bytes: Vec<u8>) -> HostFrame {

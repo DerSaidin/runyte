@@ -4056,6 +4056,14 @@ graphically. JSON is pretty-printed when valid and retains its original text
 with a diagnostic otherwise. YAML retains its comments, structure and ordering.
 Source code uses available syntax highlighting; other text uses monospace.
 
+Generated pages — Markdown, JSON, YAML, source and plain text — take the active
+theme's colours: its background and text, its link and heading colours, and
+its syntax colours for highlighted code. Switching theme or the setting
+repaints an open preview. Set `editor.preview_theme_colors` to `false` to keep
+the original light page. Static HTML and valid SVG keep the appearance they
+were written with; HTML that styles itself through `prefers-color-scheme`
+follows whether the theme is dark or light.
+
 Wheel/trackpad scrolling preserves fractional pixels; Shift-wheel pans horizontally.
 The preview also uses the built-in PDF navigation keys: `j`/`k` and arrows,
 `h`/`l`, page/half-page controls, `gg`/`ge`, and `+`/`-` zoom (`z1` resets).
@@ -6371,6 +6379,7 @@ file-only.
 | `editor.selecting_motions` | `true` | boolean | `w/b/e/W/B/E` and `f/t/F/T` select what they cross, as in Helix. `false` moves a caret instead. |
 | `editor.auto_close_terminal` | `true` | boolean | Forget terminal sessions and their output when the program exits. `false` retains future exited sessions for review in the Finder and `Space t t`. |
 | `editor.terminal_theme_colors` | `true` | boolean | Use the active theme for terminal ANSI colours 0–15. Applies immediately, including existing output. |
+| `editor.preview_theme_colors` | `true` | boolean | Paint `:preview` Markdown, data and source pages in the active theme's colours. `false` keeps the light page. Applies immediately to open previews. |
 | `editor.command_mode_dim` | `true` | boolean | Gray out pane text while a command prompt is open. |
 
 #### Workspace settings

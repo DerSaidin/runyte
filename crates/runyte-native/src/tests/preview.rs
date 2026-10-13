@@ -34,6 +34,7 @@ fn obsolete_request_is_refused_before_starting_a_helper() {
         scroll: [0.0, 0.0],
         selection: None,
         adjacent: true,
+        theme: None,
     };
     let result = render_request(&request, &AtomicBool::new(true), &mut None);
     assert_eq!(result.err().as_deref(), Some("Preview cancelled"));
@@ -122,6 +123,7 @@ fn cached_output() -> super::Output {
     super::Output {
         scale: 1.0,
         zoom: 1.0,
+        theme: None,
         reply: super::Reply {
             width: 1080,
             height: 800,
@@ -133,6 +135,7 @@ fn cached_output() -> super::Output {
             raster_height: 2400,
             origin: [0.0; 2],
             cacheable: true,
+            themed: false,
         },
         image: Arc::new(super::RenderImage::new(vec![image::Frame::new(
             image::RgbaImage::new(1, 1),
@@ -195,11 +198,16 @@ fn an_in_flight_cache_refresh_cannot_rewind_a_newer_cached_scroll() {
         scroll: [0.0; 2],
         selection: None,
         adjacent: true,
+        theme: None,
     };
     assert!(cached_output().matches(&request));
     let mut resized = request.clone();
     resized.width = 600;
     assert!(!cached_output().matches(&resized));
+    // A theme change or toggling the setting replaces a raster painted in the old colours.
+    let mut themed = request.clone();
+    themed.theme = Some(palette());
+    assert!(!cached_output().matches(&themed));
     views.states.insert(
         1,
         State {
@@ -305,4 +313,118 @@ fn native_fast_pane_strokes_and_repeats_reach_the_editor() {
             Lookup::NoMatch
         ));
     }
+}
+
+fn palette() -> runyte::document_preview::Palette {
+    let theme = runyte::config::Config::default().startup_theme().unwrap().1;
+    runyte::document_preview::Palette::from_theme(&theme)
+}
+
+#[test]
+fn themed_request_carries_channels_the_helper_reads() {
+    let request = Request {
+        text: "# hi".into(),
+        selection_only: false,
+        language: "markdown".into(),
+        path: None,
+        width: 100,
+        height: 100,
+        scale: 1.0,
+        zoom: 1.0,
+        scroll: [0.0; 2],
+        selection: None,
+        adjacent: false,
+        theme: Some(palette()),
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    let theme = &wire["theme"];
+    for key in [
+        "background",
+        "foreground",
+        "muted",
+        "surface",
+        "code",
+        "border",
+        "link",
+        "heading",
+        "error",
+    ] {
+        assert_eq!(theme[key].as_array().map(Vec::len), Some(3), "{key}");
+    }
+    assert!(theme["dark"].is_boolean());
+    let syntax = theme["syntax"].as_array().unwrap();
+    assert!(!syntax.is_empty());
+    assert!(
+        syntax
+            .iter()
+            .all(|entry| entry[0].is_string() && entry[1].as_array().map(Vec::len) == Some(3))
+    );
+    let light = Request {
+        theme: None,
+        ..request
+    };
+    assert!(serde_json::to_value(&light).unwrap()["theme"].is_null());
+}
+
+#[test]
+fn layer_colours_follow_the_palette_and_keep_the_light_page_without_one() {
+    use super::LayerColours;
+    assert_eq!(
+        LayerColours::new(None),
+        LayerColours {
+            ground: 0xffffff,
+            text: 0x333333,
+            link: 0x0969da,
+            error: 0x990000,
+        }
+    );
+    let mut palette = palette();
+    palette.background = [0x01, 0x02, 0x03];
+    palette.foreground = [0x04, 0x05, 0x06];
+    palette.link = [0x07, 0x08, 0x09];
+    palette.error = [0x0a, 0x0b, 0x0c];
+    assert_eq!(
+        LayerColours::new(Some(&palette)),
+        LayerColours {
+            ground: 0x010203,
+            text: 0x040506,
+            link: 0x070809,
+            error: 0x0a0b0c,
+        }
+    );
+}
+
+#[test]
+fn authored_pages_keep_a_white_layer_under_a_themed_editor() {
+    use super::{Pane, page_palette};
+    let pane = |language: &str| Pane {
+        pane: 1,
+        active: true,
+        body: runyte::layout::Rect::default(),
+        document: runyte::document_preview::DocumentPreview {
+            generation: 1,
+            source: 0,
+            text: String::new(),
+            selection_only: false,
+            language: language.into(),
+            path: None,
+        },
+        palette: Some(palette()),
+    };
+    // Before the first frame the language decides.
+    assert!(page_palette(&pane("markdown"), None).is_some());
+    assert!(page_palette(&pane("html"), None).is_none());
+    assert!(page_palette(&pane("svg"), None).is_none());
+    let error = String::from("failed");
+    assert!(page_palette(&pane("rust"), Some(Err(&error))).is_some());
+    // Afterwards the helper's reply does, including for a broken drawing.
+    let mut output = cached_output();
+    assert!(page_palette(&pane("markdown"), Some(Ok(&output))).is_none());
+    output.reply.themed = true;
+    assert!(page_palette(&pane("svg"), Some(Ok(&output))).is_some());
+    let light = Pane {
+        palette: None,
+        ..pane("markdown")
+    };
+    assert!(page_palette(&light, Some(Ok(&output))).is_none());
 }

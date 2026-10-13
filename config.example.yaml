@@ -36,6 +36,8 @@ editor:
   command_mode_dim: true
   auto_close_terminal: true # forget terminal output when its program exits
   terminal_theme_colors: true # use the theme for terminal ANSI colours 0–15
+  # Paint :preview documents in the active theme; false keeps them light.
+  preview_theme_colors: true
 
 # Refresh visible Git views and tracked-file gutters automatically;
 # :git-refresh remains available.
