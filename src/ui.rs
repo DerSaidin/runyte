@@ -2538,6 +2538,9 @@ fn draw_terminal(
     terminal: &TerminalView,
     body: TuiRect,
 ) {
+    // A retained host frame can outlive the client's previous window size.
+    // Use the same clipped geometry for Paragraph and direct spacer styling.
+    let body = body.intersection(frame.area());
     let background = theme.pane_background(active);
     let lines = terminal
         .rows
@@ -2549,6 +2552,29 @@ fn draw_terminal(
         Paragraph::new(lines).style(Style::default().fg(theme.foreground).bg(background)),
         body,
     );
+    // Paragraph resets a wide glyph's spacer. Terminal backends paint the
+    // whole glyph with its lead style, but the native frontend paints cell
+    // backgrounds individually. Preserve that same style on both columns.
+    let buffer = frame.buffer_mut();
+    for (row, cells) in terminal
+        .rows
+        .iter()
+        .take(usize::from(body.height))
+        .enumerate()
+    {
+        for (column, cell) in cells
+            .iter()
+            .take(usize::from(body.width.saturating_sub(1)))
+            .enumerate()
+        {
+            if cell.width == 2 {
+                let x = body.x + column as u16;
+                let y = body.y + row as u16;
+                let style = buffer[(x, y)].style();
+                buffer[(x + 1, y)].set_style(style);
+            }
+        }
+    }
 }
 
 fn terminal_line(
@@ -2599,7 +2625,9 @@ fn terminal_line(
                     .bg(background),
             };
         }
-        if cursor == Some(column) {
+        if cursor
+            .is_some_and(|cursor| cursor >= column && cursor < column + usize::from(cell.width))
+        {
             style = if active {
                 // Like an editor caret, the active terminal caret follows the
                 // current NOR/INS/SEL colour. Rebuild the style so a child's
@@ -8468,6 +8496,109 @@ mod tests {
             terminal_style(&theme, false, &cell).bg,
             Some(theme.inactive_background)
         );
+    }
+
+    #[test]
+    fn terminal_cursor_on_either_half_of_an_emoji_highlights_the_whole_glyph() {
+        let app = App::new(Config::default(), None).unwrap();
+        let theme = TuiTheme::new(&app.theme);
+        for emoji in ["😃", "😶‍🌫️", "❤️"] {
+            let mut emulator = crate::terminal::emulator::Emulator::new(4, 1);
+            emulator.feed(format!("{emoji}x").as_bytes());
+            let mut view = TerminalView {
+                revision: 0,
+                columns: 4,
+                rows: vec![emulator.grid().line(0).unwrap().clone()],
+                line_ids: vec![None],
+                cursor: None,
+                scrollback: 0,
+                live: true,
+                review: false,
+                newer_output: false,
+                highlights: Vec::new(),
+            };
+            for column in [0, 1, 2] {
+                view.cursor = Some((0, column));
+                for active in [false, true] {
+                    let mut terminal = Terminal::new(TestBackend::new(4, 1)).unwrap();
+                    // Inspect the composed frame, including spacer styles;
+                    // the native frontend reads these without TUI diffing.
+                    let frame = terminal
+                        .draw(|frame| {
+                            draw_terminal(
+                                frame,
+                                &theme,
+                                Mode::Insert,
+                                active,
+                                false,
+                                &view,
+                                frame.area(),
+                            );
+                        })
+                        .unwrap();
+                    let buffer = frame.buffer;
+                    assert_eq!(buffer[(0, 0)].symbol(), emoji);
+                    assert_eq!(buffer[(2, 0)].symbol(), "x");
+                    assert_eq!(buffer[(0, 0)].style(), buffer[(1, 0)].style());
+                    let lead = if column < 2 { 0 } else { 2 };
+                    let other = if column < 2 { 2 } else { 0 };
+                    if active {
+                        assert_eq!(buffer[(lead, 0)].bg, theme.cursor(Mode::Insert));
+                        assert_ne!(buffer[(other, 0)].bg, theme.cursor(Mode::Insert));
+                    } else {
+                        assert!(buffer[(lead, 0)].modifier.contains(Modifier::UNDERLINED));
+                        assert!(!buffer[(other, 0)].modifier.contains(Modifier::UNDERLINED));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_wide_cell_styles_clip_to_a_smaller_frame_during_resize() {
+        let app = App::new(Config::default(), None).unwrap();
+        let theme = TuiTheme::new(&app.theme);
+        let mut emulator = crate::terminal::emulator::Emulator::new(8, 3);
+        emulator.feed("😃xx😶‍🌫️\r\n😃xx😶‍🌫️\r\n😃xx😶‍🌫️".as_bytes());
+        let view = TerminalView {
+            revision: 0,
+            columns: 8,
+            rows: (0..3)
+                .map(|row| emulator.grid().line(row).unwrap().clone())
+                .collect(),
+            line_ids: vec![None; 3],
+            cursor: Some((0, 1)),
+            scrollback: 0,
+            live: true,
+            review: false,
+            newer_output: false,
+            highlights: Vec::new(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(6, 3)).unwrap();
+        let frame = terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("######\n#     \n#     "), frame.area());
+                draw_terminal(
+                    frame,
+                    &theme,
+                    Mode::Insert,
+                    true,
+                    false,
+                    &view,
+                    TuiRect::new(1, 1, 8, 3),
+                );
+            })
+            .unwrap();
+        for x in 0..6 {
+            assert_eq!(frame.buffer[(x, 0)].symbol(), "#");
+        }
+        for y in 1..3 {
+            assert_eq!(frame.buffer[(0, y)].symbol(), "#");
+            assert_eq!(frame.buffer[(1, y)].symbol(), "😃");
+            assert_eq!(frame.buffer[(1, y)].style(), frame.buffer[(2, y)].style());
+            assert_eq!(frame.buffer[(5, y)].symbol(), " ", "clipped wide glyph");
+        }
+        assert_eq!(frame.buffer[(1, 1)].bg, theme.cursor(Mode::Insert));
     }
 
     #[test]

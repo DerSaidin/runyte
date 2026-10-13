@@ -47,6 +47,18 @@ fn wrapped_web_links_resolve_from_every_character_in_frozen_history() {
 }
 
 #[test]
+fn emoji_widening_at_the_margin_preserves_wrapped_link_provenance() {
+    let url = "https://example.com/❤️/tail";
+    // The narrow heart is initially printed in the last column; its selector
+    // relocates the whole cluster. That vacated column is not a URL space.
+    for mode in ["", "\x1b[4h", "\x1b[?1049h"] {
+        let mut terminal = session(20, 2);
+        terminal.feed(format!("{mode}{url}").as_bytes());
+        assert_eq!(target_at(&mut terminal, "tail").as_deref(), Some(url));
+    }
+}
+
+#[test]
 fn wrapped_links_preserve_spaces_and_real_newlines_as_boundaries() {
     let mut terminal = session(21, 5);
     terminal.feed(b"https://example.com/ \r\nnext\r\n");

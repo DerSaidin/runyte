@@ -585,8 +585,8 @@ impl Grid {
         autowrap: bool,
         insert: bool,
     ) {
-        if let Some((column, width)) = self.join_target(character, insert) {
-            self.join(column, width, character, pen, autowrap);
+        if let Some((column, width)) = self.join_target(character, autowrap) {
+            self.join(column, width, character, pen, autowrap, insert);
             return;
         }
         let width = UnicodeWidthChar::width(character)
@@ -668,18 +668,24 @@ impl Grid {
         }
     }
 
-    /// Whether `character`, printed now, continues the cluster in the cell
-    /// before the cursor rather than starting a cell of its own.
-    pub(super) fn joins(&self, character: char, insert: bool) -> bool {
-        self.join_target(character, insert).is_some()
+    /// Whether printing completes a row, including a cluster that only
+    /// becomes wide when its presentation selector arrives.
+    pub(super) fn wraps_on_print(&self, character: char, autowrap: bool) -> bool {
+        if !autowrap {
+            return false;
+        }
+        if let Some((column, width)) = self.join_target(character, autowrap) {
+            return column + usize::from(width) > self.columns;
+        }
+        let width = character.width().unwrap_or(0).min(self.columns);
+        width > 0 && (self.cursor.pending_wrap || self.cursor.column + width > self.columns)
     }
 
     /// The cell before the cursor that `character` continues, and the width
-    /// the joined cluster takes. A cell's width always equals the measured
-    /// width of its text, because frontends place a cell by measuring it; a
-    /// join that would break that, or not fit, leaves the code point to the
-    /// ordinary single-character rules instead.
-    fn join_target(&self, character: char, insert: bool) -> Option<(usize, u8)> {
+    /// the joined cluster takes. Frontends measure its display text, so a
+    /// widening join must also update its spacer, cursor, and row placement.
+    /// Unsupported widths fall back to the ordinary single-character rules.
+    fn join_target(&self, character: char, autowrap: bool) -> Option<(usize, u8)> {
         // Nothing printable joins an ASCII character to what precedes it.
         if character.is_ascii() {
             return None;
@@ -713,33 +719,74 @@ impl Grid {
         if width == usize::from(cell.width) || (after_joiner && cell.width == 2) {
             return Some((column, cell.width));
         }
+        // A child may disable wrapping between a base at the margin and its
+        // selector. Keep the text but clip its presentation instead of
+        // wrapping against the child's current mode.
+        if !autowrap && column + width > self.columns {
+            return Some((column, cell.width));
+        }
         // A presentation selector can turn a one-cell symbol into a two-cell
-        // emoji. It widens only when the cursor is right after it and the
-        // row has room, which is where a terminal that clusters would put it.
+        // emoji. At the right margin the whole cluster moves to the next
+        // row, just as if its full width had been known on the first print.
+        // A one-column terminal cannot represent a wide cluster.
         (width == 2
             && cell.width == 1
-            && !insert
-            && !self.cursor.pending_wrap
-            && self.cursor.column == column + 1
-            && column + 1 < self.columns)
+            && self.columns >= 2
+            && (self.cursor.pending_wrap || self.cursor.column == column + 1))
             .then_some((column, 2))
     }
 
-    fn join(&mut self, column: usize, width: u8, character: char, pen: Pen, autowrap: bool) {
-        let row = self.cursor.row;
-        let cell = &mut self.lines[row][column];
+    fn join(
+        &mut self,
+        mut column: usize,
+        width: u8,
+        character: char,
+        pen: Pen,
+        autowrap: bool,
+        insert: bool,
+    ) {
+        let mut row = self.cursor.row;
+        let mut cell = self.lines[row][column];
         cell.combining[usize::from(cell.combining_len)] = character;
         cell.combining_len += 1;
         if width == cell.width {
+            self.lines[row][column] = cell;
             return;
         }
-        cell.width = width;
-        self.clear_partner(row, column + 1, pen);
-        self.lines[row][column + 1] = Cell::spacer(pen);
         let id = self.line_ids[row].id;
         let rewriting = self.rewrite == Some((id, column + 1));
+        let wrapped = column + usize::from(width) > self.columns;
+        if wrapped {
+            // Retire the provisional narrow cell before scrolling: the old
+            // row may move into history or out of a scrolling region.
+            self.lines[row][column] = Cell::blank(pen);
+            self.cursor.column = 0;
+            self.index(pen);
+            row = self.cursor.row;
+            self.line_ids[row].continuation = Some((id, column));
+            column = 0;
+            self.rewrite = None;
+        }
+        if insert {
+            // The base already inserted one column on its original row.
+            // Widening needs only the extra column, or both after wrapping.
+            let continuation = self.line_ids[row].continuation;
+            self.insert_characters(if wrapped { 2 } else { 1 }, pen);
+            self.line_ids[row].continuation = continuation;
+        }
+        cell.width = width;
+        if wrapped {
+            self.clear_partner(row, column, pen);
+        }
+        self.clear_partner(row, column + 1, pen);
+        self.lines[row][column] = cell;
+        self.lines[row][column + 1] = Cell::spacer(Pen {
+            foreground: cell.foreground,
+            background: cell.background,
+            attributes: cell.attributes,
+        });
         let advanced = column + 2;
-        if rewriting {
+        if rewriting && !wrapped {
             if advanced == self.columns {
                 self.clear_row_wraps(row);
             } else {
@@ -751,6 +798,7 @@ impl Grid {
             self.cursor.pending_wrap = autowrap;
         } else {
             self.cursor.column = advanced;
+            self.cursor.pending_wrap = false;
         }
     }
 
@@ -1541,12 +1589,12 @@ mod tests {
         );
         assert_cells_match_their_text(&grid);
 
-        // A selector at the right margin has no column to widen into.
-        let mut grid = Grid::new(3, 1, false);
-        write(&mut grid, "ab❤\u{FE0F}");
-        assert_eq!(grid.lines[0][2].width, 1);
-        assert_eq!(grid.lines[0][2].text(), "❤\u{FE0F}");
-        assert_eq!(grid.lines[0][2].display_text(), "❤");
+        // A one-column screen cannot represent an emoji's two cells.
+        let mut grid = Grid::new(1, 1, false);
+        write(&mut grid, "❤\u{FE0F}");
+        assert_eq!(grid.lines[0][0].width, 1);
+        assert_eq!(grid.lines[0][0].text(), "❤\u{FE0F}");
+        assert_eq!(grid.lines[0][0].display_text(), "❤");
         assert_cells_match_their_text(&grid);
     }
 

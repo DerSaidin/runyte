@@ -152,15 +152,37 @@ Deliberate limits:
   cluster before the cursor, such as a combining mark, variation selector,
   skin tone, regional indicator or the parts of a joined emoji, joins that
   cell instead of taking a column. A selector that makes a one-cell symbol an
-  emoji widens it when the next column is free. A cell retains at most ten
-  code points after its first, enough for every standard emoji sequence;
-  later ones fall back to ordinary placement.
+  emoji widens it, inserting the extra column in insert mode or replacing
+  the neighboring cell otherwise. At the right margin, autowrap moves the
+  whole cluster to the next row and records the vacated column as wrap
+  padding. One-column screens retain the source text but may display only the
+  base character. Disabling autowrap between the base and its selector also
+  keeps that narrow presentation at the margin rather than wrapping. A cell
+  retains at most ten code points after its first, enough for every standard
+  emoji sequence; later ones fall back to ordinary placement.
   Each cell is drawn with text that measures its own width, so a sequence
   written without its presentation selectors, such as `🤷‍♂`, is drawn in emoji
   presentation and copied exactly as written.
+  Known limitation: if autowrap was already disabled when the base was
+  printed in the final column, a following selector can attach to the
+  preceding cell.
+- A cursor on either cell of a wide glyph highlights the whole glyph. Child
+  cursor movements and erase counts remain cell-based: they are not rewritten
+  as grapheme editing commands. Shells and line editors that sum individual
+  code-point widths can disagree with the two-cell display of `😶‍🌫️`, and can
+  delete only part of the sequence. That child-side editing limitation is not
+  a loss of UTF-8 or a font failure in Runyte.
 - Integrated sessions survive only their workspace-host process. They do not
   survive a force stop, host crash/replacement, logout, reboot, or machine
   failure.
+
+Emoji regressions in `tests/terminal_sequences.rs` cover `😃` and `😶‍🌫️`,
+fragmented UTF-8, addressed redraw and erase, captured shell output, insert
+mode, widening at the margin, scrolling, and completed-line accounting.
+`terminal_cursor_on_either_half_of_an_emoji_highlights_the_whole_glyph` in
+`src/ui.rs` checks the composed cell buffer used by both frontends.
+`emoji_widening_at_the_margin_preserves_wrapped_link_provenance` in
+`src/terminal/tests/navigation.rs` checks review navigation across the wrap.
 
 ## Wrapped web links in review
 
