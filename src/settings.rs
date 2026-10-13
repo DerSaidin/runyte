@@ -48,6 +48,7 @@ pub enum SettingId {
     EditorExplorerSort,
     EditorExplorerDetails,
     EditorSoftWrap,
+    EditorAlwaysWrapRenderedMarkdown,
     EditorRenderWhitespace,
     EditorZenWidth,
     EditorHardWrapWidth,
@@ -259,6 +260,15 @@ const DESCRIPTORS: &[SettingDescriptor] = &[
         key: "editor.soft_wrap",
         title: "Soft wrap",
         description: "Wrap long visual lines without changing the buffer",
+        value_type: SettingType::Boolean,
+        preview: PreviewPolicy::Immediate,
+        persistence: PersistencePolicy::ConfigFile,
+    },
+    SettingDescriptor {
+        id: SettingId::EditorAlwaysWrapRenderedMarkdown,
+        key: "editor.always_wrap_rendered_markdown",
+        title: "Always wrap rendered Markdown",
+        description: "Wrap rendered Markdown; when off, follow general soft wrap",
         value_type: SettingType::Boolean,
         preview: PreviewPolicy::Immediate,
         persistence: PersistencePolicy::ConfigFile,
@@ -502,6 +512,7 @@ impl SettingId {
         Self::EditorExplorerSort,
         Self::EditorExplorerDetails,
         Self::EditorSoftWrap,
+        Self::EditorAlwaysWrapRenderedMarkdown,
         Self::EditorRenderWhitespace,
         Self::EditorZenWidth,
         Self::EditorHardWrapWidth,
@@ -570,6 +581,9 @@ impl SettingId {
             }
             Self::EditorShowHiddenFiles => SettingValue::Boolean(config.editor.show_hidden_files),
             Self::EditorSoftWrap => SettingValue::Boolean(config.editor.soft_wrap),
+            Self::EditorAlwaysWrapRenderedMarkdown => {
+                SettingValue::Boolean(config.editor.always_wrap_rendered_markdown)
+            }
             Self::EditorRenderWhitespace => SettingValue::Boolean(config.editor.render_whitespace),
             Self::EditorZenWidth => SettingValue::Integer(config.editor.zen_width),
             Self::EditorHardWrapWidth => SettingValue::Integer(config.editor.hard_wrap_width),
@@ -716,6 +730,9 @@ impl SettingId {
             }
             (Self::EditorShowHiddenFiles, SettingValue::Boolean(value)) => {
                 config.editor.show_hidden_files = *value;
+            }
+            (Self::EditorAlwaysWrapRenderedMarkdown, SettingValue::Boolean(value)) => {
+                config.editor.always_wrap_rendered_markdown = *value;
             }
             (Self::EditorSoftWrap, SettingValue::Boolean(value)) => {
                 config.editor.soft_wrap = *value;

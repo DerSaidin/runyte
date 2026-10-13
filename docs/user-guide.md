@@ -1253,6 +1253,9 @@ offsets, selections, wrapping, and saved files are unchanged. The setting is
 
 `Space p s` toggles `editor.soft_wrap` for this session.
 When enabled, the global status line shows `↪` before the cursor position.
+The arrow reports this general setting, even when a rendered Markdown page
+wraps independently. `editor.always_wrap_rendered_markdown` defaults to `true`;
+set it to `false` to make rendered pages follow `Space p s` too.
 
 - Wrapping follows the live pane width, including after a resize. It does not
   use the hard-wrap width and never changes the text.
@@ -2729,7 +2732,7 @@ it, and the row below is levelled.
 
 - The buffer, selections, undo history, and split tree are unchanged. Toggling
   again restores the exact previous layout.
-- Soft wrap still follows `editor.soft_wrap`.
+- Soft wrap keeps the same settings, including the rendered Markdown override.
 - With several panes, the two views share one state: asking for the other
   switches to it, and only the view actually showing toggles off.
 - While a pane is maximized, splitting, closing, directional focus, and pane
@@ -4128,7 +4131,16 @@ same option that makes `Space p r` refill it as Markdown. Its page is named
 `[rendered scratch]`. With the option off, the scratchpad is plain text and
 `?` is unbound there.
 
-**Tables and soft wrap.** `Space p s` also wraps rendered tables.
+**Tables and soft wrap.** Rendered pages, including rendered scratchpads,
+wrap by default independently of source buffers. Set
+`editor.always_wrap_rendered_markdown: false` to follow the general
+`editor.soft_wrap` setting controlled by `Space p s`. Opening or leaving a page
+does not change the general setting. When the override is active, toggling
+soft wrap still changes the general setting and the status-line arrow; the
+feedback explains why the page stays wrapped. Comparison panes and the
+large-line safety limit still prevent wrapping.
+
+Rendered tables use the same effective wrapping setting as the rest of the page.
 
 - Columns share the pane's text width, keeping short columns compact and
   wrapping longer cells independently.
@@ -6366,6 +6378,7 @@ file-only.
 | `editor.explorer_sort` | `name` | `name`, `modified`, `size`, each also `_descending` | Explorer order. Directories always come first. |
 | `editor.explorer_details` | `false` | boolean | Show `ls -l` style mode, owner, size, and time columns. `?` toggles it in an explorer. |
 | `editor.soft_wrap` | `false` | boolean | Wrap long lines visually without changing the text. |
+| `editor.always_wrap_rendered_markdown` | `true` | boolean | Always wrap rendered Markdown pages, including rendered scratchpads. When false, follow `editor.soft_wrap`. Does not affect Markdown source. |
 | `editor.render_whitespace` | `false` | boolean | Show `·` for spaces, `→` for tabs, and `¬` for line endings. |
 | `editor.zen_width` | `100` | 1–1000 | Maximum text width while `:zen` is active. |
 | `editor.hard_wrap_width` | `80` | 1–1000 | Width used by `Space p w` (hard wrap) and `Space p r` (reflow). |

@@ -67,7 +67,9 @@ them, regardless of which extensibility direction is chosen.
   notification counts. Its leftmost mode label follows the current mode's
   caret role; the rest of the row keeps the ordinary theme background. The
   cursor position is prefixed with `↪` while `editor.soft_wrap` is enabled;
-  the marker matches the gutter's soft-wrap continuation arrow. The pane title,
+  the marker matches the gutter's soft-wrap continuation arrow. It reports the
+  general setting even when `editor.always_wrap_rendered_markdown` independently
+  wraps a rendered page. The pane title,
   not this row, owns active-buffer identity.
   Active-buffer state includes `[+]`, `[STALE]`, and `[RO]` with the same
   meanings and order as the pane title.
