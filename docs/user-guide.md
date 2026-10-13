@@ -127,153 +127,32 @@ Helix and which do not.
 
 ## Install and run
 
-Runyte has terminal and desktop editions with the same editor, keymap,
-configuration, plugins and persistent-session protocol. The terminal edition is
-installed by the curl script and crates.io. The desktop edition adds a GPUI
-window, native clipboard, image/PDF viewing and document preview; it also runs
-in a terminal. Open its window with `--window`. Desktop Linux needs Vulkan
-(and glibc 2.39 or newer for prebuilt archives); macOS needs version 11 or later.
-Poppler is an optional PDF fallback. There is no Windows desktop window yet.
-Every persistent-session client and host must use the same Runyte version,
-regardless of edition. See the [edition comparison](../README.md#editions) and
-[desktop build instructions](../README.md#desktop-edition).
+Runyte has terminal and desktop editions with the same editor, configuration,
+plugins and persistent sessions. The desktop edition adds the window and media
+viewing, and also runs in a terminal. Both distributions install as `runyte`;
+`--window` requires the desktop edition. Clients and hosts in a persistent
+session must use the same Runyte version.
 
-The installation methods below install the terminal edition.
-
-Runyte runs on Linux, macOS, and Windows 11. [Windows support](#windows-support)
-lists what is missing or different there.
-
-| Method | Platforms | Section |
-| --- | --- | --- |
-| Install script | x86-64 and ARM64 Linux and macOS | [Install and update with curl](#install-and-update-with-curl) |
-| Release archive | x86-64 and ARM64 Linux and macOS; x86-64 Windows | [Manual download and source installation](#manual-download-and-source-installation), [Windows support](#windows-support) |
-| `cargo install` | Anywhere Rust 1.88 and a C compiler are available | [Manual download and source installation](#manual-download-and-source-installation) |
-| From a clone | Anywhere Rust 1.88 and a C compiler are available | [Building from a clone](#building-from-a-clone) |
+Start with the [README quick start](../README.md#installation), or use the
+separate [installation guide](../INSTALLATION.md) for edition selection,
+dependencies, platform-specific steps, shell setup and updates.
 
 ### Install and update with curl
 
-On x86-64 or ARM64 Linux and macOS:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/runyte/runyte/main/install.sh | sh
-```
-
-Run the same command again to update.
-
-**What the script does:**
-
-1. Resolves the latest GitHub Release once.
-2. Downloads that version's archive and `SHA256SUMS` over HTTPS.
-3. Checks the archive's SHA-256.
-4. Stages the executable and replaces `~/.local/bin/runyte`.
-
-- A failed download, checksum, or extraction leaves an existing installation
-  intact.
-- The checksums establish integrity against the release manifest. They are not
-  independent signatures.
-- The [installer source](../install.sh) is maintained in this repository and
-  served from `main`.
-
-**Requirements:**
-
-- No sudo.
-- `curl`, `tar` with xz support, either `sha256sum` or `shasum`, and standard
-  Unix utilities. Some Linux distributions package xz support separately as
-  `xz-utils` or `xz`.
-- Linux needs glibc 2.35 or newer. Alpine/musl and other operating systems or
-  architectures are rejected.
-- macOS binaries are unsigned and unnotarized. The script does not change
-  Gatekeeper settings.
-
-**Read the script before running it:**
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/runyte/runyte/main/install.sh -o install.sh
-less install.sh
-sh install.sh
-```
-
-**Pin a version or choose a directory.** The script accepts a release version
-(with or without `v`) and an absolute install directory:
-
-```sh
-sh install.sh --version 0.3.0 --install-dir "$HOME/.local/bin"
-```
-
-- Omit `--version` to install or update to the latest release.
-- Keep the same `--install-dir` when updating a custom installation.
-- A pinned version can reinstall or downgrade to any release with matching
-  archives and checksums.
-- The script refuses a symlink or directory at the destination `runyte` path.
-
-**Add the directory to `PATH`** if it is not already there. For the default
-location in a POSIX shell:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-**After installing:**
-
-- Check `command -v runyte` and `runyte --version`, especially if another copy
-  was installed through Cargo or manually. The installer only updates the copy
-  in its chosen directory.
-- Running editors and persistent sessions keep using the old executable until
-  restarted. Save your work before restarting them.
-- The script installs the executable only. It does not change configuration or
-  shell startup files.
-- To uninstall, remove `~/.local/bin/runyte` (or the file in your custom
-  directory).
+The [install script instructions](../INSTALLATION.md#install-script-linux-and-macos)
+cover the terminal edition, checksum verification, version selection and custom
+install directories. The script preserves existing desktop installations.
 
 ### Manual download and source installation
 
-**Release archives.** Prebuilt archives for x86-64 and ARM64 Linux and macOS
-are on the [GitHub Releases page](https://github.com/runyte/runyte/releases).
-
-1. Download the archive for your machine and `SHA256SUMS`.
-2. Compare the archive's checksum with its entry in `SHA256SUMS`: use
-   `sha256sum` on Linux or `shasum -a 256` on macOS.
-3. Extract it. The versioned top-level directory holds the editor, the
-   configuration example, and complete licence material.
-
-The macOS executables are unsigned and not notarized.
-
-**From crates.io.** You need Rust 1.88 or newer and a C compiler; the bundled
-tree-sitter grammars are built from C source during the install.
-
-```sh
-cargo install runyte --locked
-runyte README.md
-```
-
-This installs the `runyte` editor executable. Keep `--locked`: without it,
-Cargo ignores the dependency versions this release was tested with and
-re-resolves to the newest compatible ones. That can pull in a crate needing a
-newer toolchain than Runyte does, and the install then fails naming a
-transitive dependency you have never heard of.
+See [release archives](../INSTALLATION.md#release-archives) for terminal downloads,
+[Cargo installation](../INSTALLATION.md#install-with-cargo) for crates.io, and
+[desktop installation](../INSTALLATION.md#desktop-edition) for the window edition.
 
 ### Building from a clone
 
-```sh
-./build.sh --release
-./target/release/runyte README.md
-```
-
-`build.sh` wraps `cargo build --bins` and forwards any extra arguments.
-
-Install from the clone with Cargo:
-
-```sh
-cargo install --path .
-```
-
-During development:
-
-```sh
-./build.sh
-cargo run -- src/main.rs
-cargo test
-```
+See [building from source](../INSTALLATION.md#build-from-source) for prerequisites,
+package names, build commands and installation of the resulting executable.
 
 ### Windows support
 
@@ -281,25 +160,8 @@ Runyte runs natively on x86-64 Windows 11 24H2 or later, inside Windows
 Terminal. The rest of this guide applies to Windows too; this section lists
 what is missing, what is limited, and what works differently.
 
-**Release ZIP.** Releases from 0.3.2 onward include an x86-64 Windows ZIP with
-`runyte.exe`, the configuration example, and licence material.
-
-- Its hash is in `SHA256SUMS`. Compare
-  `Get-FileHash -Algorithm SHA256 <archive.zip>` with that entry before
-  extracting.
-- Executables are unsigned.
-- The ZIP does not bundle the x64 Microsoft Visual C++ runtime
-  (`VCRUNTIME140.dll`). Install Microsoft's x64 Visual C++ Redistributable if
-  it is absent.
-
-**Building from source** needs Rust 1.88 or newer and Visual Studio Build Tools
-with the C++ toolchain and Windows SDK. The bundled grammars require the C
-compiler.
-
-```powershell
-cargo build --release --locked
-.\target\release\runyte.exe --ide README.md
-```
+See [Windows installation](../INSTALLATION.md#windows) for release ZIPs,
+checksums, the Visual C++ runtime and source-build prerequisites.
 
 #### Not available on Windows
 

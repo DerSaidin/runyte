@@ -1,5 +1,9 @@
 # Native desktop integration
 
+For edition selection, system dependencies and installation, start with
+[INSTALLATION.md](../../INSTALLATION.md). This guide covers desktop registration,
+package construction and macOS signing.
+
 Desktop packages contain one editor executable with PDF and document preview
 helpers linked into it. Build it from the checkout:
 
@@ -17,7 +21,7 @@ The release workflow builds desktop archives for Linux x86-64 and ARM64:
 `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`. Both use Ubuntu 24.04
 (glibc 2.39 or newer), separately from the terminal archives and curl installer.
 They require the native runtime libraries and a working Vulkan driver described
-in the repository README. Both architectures run the same window/preview
+in [INSTALLATION.md](../../INSTALLATION.md#linux-desktop-dependencies). Both architectures run the same window/preview
 acceptance before publication.
 
 Extract the archive to its final location and run `./runyte --window --editor`. Preview runs through the packaged executable. From that extracted directory, register a desktop launcher:
@@ -34,7 +38,7 @@ python3 contrib/packaging/package.py linux --binary target/release/runyte-deskto
 ```
 
 `--output` must name a new directory. The package includes the editor,
-`runed`, notices, the user guide, icons and the desktop registration script.
+`runed`, notices, the installation and user guides, icons and the desktop registration script.
 
 Register the launcher and icon for the current desktop account:
 
@@ -122,7 +126,7 @@ Replace the example identity/version and omit `--dry-run` only during the
 manual signing session. The scripts never obtain credentials from files or
 environment variables. Rejected notarization fetches the submission log and
 fails before stapling. The disk-image tool refuses an existing output, stages
-`Runyte.app`, `Applications` → `/Applications`, and README, then creates a UDZO
+`Runyte.app`, `Applications` → `/Applications`, `README.md` and `INSTALLATION.md`, then creates a UDZO
 image. CI checks an unsigned image by mounting it read-only and detaching.
 Manual quarantine, Finder, window, PTY, PDF, preview and update acceptance must
 pass before uploading the DMG and its separate checksum, as specified in the

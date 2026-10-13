@@ -69,7 +69,7 @@ def bundle_linux(binary, destination):
     shutil.copy2(binary, destination / "runyte")
     (destination / "runed").symlink_to("runyte")
     repository = HERE.parents[1]
-    for name in ("README.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "config.example.yaml"):
+    for name in ("README.md", "INSTALLATION.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "config.example.yaml"):
         shutil.copyfile(repository / name, destination / name)
     shutil.copytree(repository / "licenses", destination / "licenses")
     (destination / "docs").mkdir()
@@ -141,6 +141,7 @@ def disk_image(app, output):
         shutil.copytree(app, stage / "Runyte.app", symlinks=True)
         (stage / "Applications").symlink_to("/Applications")
         shutil.copyfile(HERE.parents[1] / "README.md", stage / "README.md")
+        shutil.copyfile(HERE.parents[1] / "INSTALLATION.md", stage / "INSTALLATION.md")
         subprocess.run(["hdiutil", "create", "-volname", f"Runyte {version}",
                         "-srcfolder", str(stage), "-format", "UDZO", str(output)], check=True)
     return output
