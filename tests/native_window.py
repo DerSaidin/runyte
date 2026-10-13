@@ -354,6 +354,8 @@ try:
         print('Persistent preview dismissal survives workspace visits; other captures and explicit reopen remain intact', flush=True)
         raise SystemExit(0)
     if args.document_preview:
+        preview_background = pixel(600,400)
+        assert preview_background != 0xffffff, 'preview theme check requires a non-white editor ground'
         command('open document.html')
         command('preview'); time.sleep(2)
         screenshot('preview-html')
@@ -477,7 +479,20 @@ try:
         screenshot('preview-narrow')
         key('equal',ctrl=True);time.sleep(1)
         screenshot('preview-scaled')
-        assert pixel(600,400) == 0xffffff, 'font resize lost preview'
+        wait_pixel(600,400,preview_background,'resized Markdown preview did not use the editor theme')
+        # The editor and themed preview share a ground, so that pixel alone
+        # cannot prove the preview survived. Repaint the retained capture in
+        # both palettes without invoking :preview again. Keep the light page
+        # for the dismissal checks below, where white distinguishes it from
+        # the source editor.
+        config_path = storage/'config/config.yaml'
+        for enabled, background in [(False, 0xffffff), (True, preview_background), (False, 0xffffff)]:
+            config_text = ''.join(line for line in config_path.read_text().splitlines(keepends=True)
+                                  if not line.startswith('  preview_theme_colors:'))
+            config_path.write_text(config_text.replace('editor:\n',
+                f'editor:\n  preview_theme_colors: {str(enabled).lower()}\n'))
+            command('config-reload')
+            wait_pixel(600,400,background,'font resize lost preview or live palette repaint failed')
         key('Escape');command('open drawing.svg');command('preview');time.sleep(1)
         screenshot('preview-svg')
         assert pixel(100,100) != 0xffffff, 'SVG was not graphical'

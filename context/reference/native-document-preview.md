@@ -464,3 +464,8 @@ tests in `crates/runyte-native/src/tests/preview.rs`; and
 `preview_pages_take_the_editor_theme_ground_or_stay_white` in
 `crates/runyte-desktop/tests/helpers.rs`, which renders every built-in theme
 through the real helper.
+`tests/native_window.py --document-preview` also checks the themed Markdown
+ground after window and font resizing, then toggles the setting off, on and
+off through `:config-reload` without recapturing. The white-page transitions
+prove that the preview remains active: the themed ground alone would also
+match the source editor after an accidental dismissal.
