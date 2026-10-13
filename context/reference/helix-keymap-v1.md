@@ -784,3 +784,24 @@ the editor’s configured keymap without dismissing the preview. Ctrl-h/j/k/l
 also pass through, with pane focus controlled by `editor.fast_pane_keys`; no new default
 binding is introduced. See
 [preview controls and limits](../../crates/runyte-preview/README.md).
+
+## Horizontal view after line breaks and wrapping
+
+**Deviation:** successful local edits that insert or remove line breaks request
+column zero in the editing pane, without changing the resulting caret position.
+This includes Enter, hard-wrap (`Space p w`), reflow (`Space p r`), `o`/`O`,
+multiline paste and joining lines. Rejected edits and no-op wraps keep the view.
+Helix instead retains the horizontal offset while keeping the caret within its
+scroll margins; see its [view scrolling implementation](https://github.com/helix-editor/helix/blob/master/helix-view/src/view.rs).
+
+Changes to effective soft wrapping, whether through `Space p s` or configuration,
+reset each affected pane before interpreting its new layout. Diff panes stay
+unwrapped and do not reset just because the setting changed.
+
+If the caret cannot fit, the pane uses the smallest horizontal scroll that
+shows it in the available text width. Tabs and grapheme display widths determine
+visibility. A scan is limited to max(text width, 4096) characters before the
+caret, plus bounded grapheme lookaround: exceptionally long zero-width runs may
+use a later origin rather than finding the global left edge. Unchanged viewport
+checks are cached. Ordinary motions retain the current horizontal scroll while
+the caret fits; vertical scrolling is unchanged.

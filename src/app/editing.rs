@@ -1008,8 +1008,17 @@ impl App {
         if matches!(self.mode, Mode::Insert | Mode::Replace) {
             self.buffers[buffer_id].begin_undo_group();
         }
+        let buffer = &self.buffers[buffer_id];
+        let changes_lines = transaction.changes().iter().any(|change| {
+            change.text.contains('\n')
+                || buffer.offset_to_row(change.from) != buffer.offset_to_row(change.to)
+        });
         let changed = self.apply_to_buffer(buffer_id, &transaction);
         if changed {
+            if changes_lines {
+                let pane = self.active_mut();
+                pane.horizontal_reset = Some((pane.buffer, pane.binding_generation));
+            }
             self.report_new_registry_errors();
         }
         changed

@@ -195,6 +195,7 @@ mod git_comparison;
 mod git_discovery;
 mod git_merge_lifecycle;
 mod git_merges;
+mod horizontal_view;
 mod indentation;
 mod jump_word_viewport;
 mod language;

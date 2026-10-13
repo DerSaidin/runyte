@@ -916,6 +916,63 @@ pub fn cells_from_column(
     cell
 }
 
+/// Choose a horizontal character origin with the caret visible. The search
+/// examines at most max(width, 4096) characters before the caret, plus bounded
+/// grapheme boundary lookaround. Long zero-width runs therefore cannot make
+/// viewport preparation proportional to the document size. For such runs the
+/// nearest bounded suffix takes precedence over finding the global left edge.
+pub(crate) fn horizontal_scroll(
+    line: ropey::RopeSlice<'_>,
+    cursor: usize,
+    current: usize,
+    width: usize,
+    tab_width: usize,
+) -> usize {
+    if width == 0 {
+        return current;
+    }
+    let cursor = crate::grapheme::floor(line, cursor.min(line.len_chars()));
+    let start = crate::grapheme::floor(line, cursor.saturating_sub(width.max(4096)));
+    let end = crate::grapheme::next(line, cursor);
+    let line = line.slice(start..end);
+    let cursor = cursor - start;
+    let current = crate::grapheme::floor(line, current.saturating_sub(start).min(cursor));
+    // The bounded slice is checked once per changed viewport, never on idle
+    // frames. Plain printable ASCII needs no segmentation or fit probes.
+    if line.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+        return start + current.max((cursor + 1).saturating_sub(width));
+    }
+    let fits = |column: usize| {
+        let mut cell = 0usize;
+        for (index, (character, cells)) in
+            crate::grapheme::cells(line.slice(column..).chars()).enumerate()
+        {
+            if column + index >= cursor {
+                return cell + cells.max(1).min(width) <= width;
+            }
+            cell += cell_width(character, cells, cell, tab_width);
+            if cell >= width {
+                return false;
+            }
+        }
+        cell < width
+    };
+    if fits(current) {
+        return start + current;
+    }
+    let mut left = current;
+    let mut right = cursor;
+    while left < right {
+        let middle = left + (right - left) / 2;
+        if fits(crate::grapheme::floor(line, middle)) {
+            right = middle;
+        } else {
+            left = middle + 1;
+        }
+    }
+    start + crate::grapheme::floor(line, left)
+}
+
 /// Absolute display-cell column of a character boundary in an unscrolled row.
 pub fn display_column(line: &str, column: usize, tab_width: usize) -> usize {
     cell_at(line, column, tab_width)

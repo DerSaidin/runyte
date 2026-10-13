@@ -1363,6 +1363,16 @@ lines.
 | `J` | Join selected lines with a space |
 | `Space p t` | Align the columns of the selected table |
 
+After an edit that inserts or removes line breaks—such as Enter, hard wrap,
+reflow, opening a line, multiline paste, or joining lines—the editing pane
+returns to column zero when the caret fits. Otherwise it scrolls right only
+far enough to keep the caret visible, accounting for tabs, wide characters,
+and the space occupied by the gutter. Rejected edits and unchanged wraps keep
+the view. Changing soft wrap through `Space p s` or configuration also resets
+each affected pane; diff panes remain unwrapped. The caret keeps its editing
+position. Exceptionally long runs of invisible characters use a bounded view
+near the caret to keep scrolling responsive.
+
 #### Whitespace markers
 
 `Space p .` shows:

@@ -529,6 +529,10 @@ pub struct Pane {
     /// Wrapped sub-row within `scroll_row`; always zero when wrapping is off.
     pub scroll_wrap: usize,
     pub scroll_col: usize,
+    /// A successful local line-structure edit requests one layout-time reset.
+    horizontal_reset: Option<(usize, u64)>,
+    prepared_soft_wrap: Option<bool>,
+    horizontal_check: Option<HorizontalScrollCheck>,
     /// Horizontal scroll within a presentation-only row prefix. Buffer text
     /// keeps using `scroll_col`, so this never changes document coordinates.
     pub row_prefix_scroll: usize,
@@ -579,6 +583,9 @@ impl Pane {
             scroll_row: 0,
             scroll_wrap: 0,
             scroll_col: 0,
+            horizontal_reset: None,
+            prepared_soft_wrap: None,
+            horizontal_check: None,
             row_prefix_scroll: 0,
             wrap_width: 1,
             preserve_scroll: false,
@@ -710,7 +717,7 @@ impl ResolvedFold {
     }
 }
 
-fn adjust_scroll(pane: &mut Pane, cursor: Position, height: usize, width: usize, offset: usize) {
+fn adjust_scroll(pane: &mut Pane, cursor: Position, height: usize, offset: usize) {
     if height == 0 {
         return;
     }
@@ -721,14 +728,49 @@ fn adjust_scroll(pane: &mut Pane, cursor: Position, height: usize, width: usize,
             pane.scroll_row = cursor.row + offset + 1 - height;
         }
     }
-    if width == 0 {
+}
+
+/// All inputs to horizontal visibility, including the resulting scroll. Idle
+/// frames reuse this check without touching document text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HorizontalScrollCheck {
+    buffer: usize,
+    binding: u64,
+    revision: u64,
+    cursor: Position,
+    width: usize,
+    tab_width: usize,
+    scroll_col: usize,
+}
+
+fn adjust_horizontal_scroll(
+    pane: &mut Pane,
+    buffer: &Buffer,
+    cursor: Position,
+    width: usize,
+    tab_width: usize,
+) {
+    let mut check = HorizontalScrollCheck {
+        buffer: pane.buffer,
+        binding: pane.binding_generation,
+        revision: buffer.revision(),
+        cursor,
+        width,
+        tab_width,
+        scroll_col: pane.scroll_col,
+    };
+    if pane.horizontal_check == Some(check) {
         return;
     }
-    if cursor.col < pane.scroll_col {
-        pane.scroll_col = cursor.col;
-    } else if cursor.col >= pane.scroll_col + width {
-        pane.scroll_col = cursor.col + 1 - width;
-    }
+    let line_start = buffer.line_to_offset(cursor.row);
+    let line = buffer
+        .text()
+        .rope()
+        .slice(line_start..line_start + buffer.line_len(cursor.row));
+    pane.scroll_col =
+        crate::wrap::horizontal_scroll(line, cursor.col, pane.scroll_col, width, tab_width);
+    check.scroll_col = pane.scroll_col;
+    pane.horizontal_check = Some(check);
 }
 
 fn adjust_scroll_wrapped(

@@ -11,9 +11,10 @@ use super::{
     FrameGeometry, GeneratedViewIdentity, HelpTopic, ListPurpose, MaximizedView, Mode,
     PICKER_LIST_INTERVAL, PICKER_PROGRESS_INTERVAL, Pane, Path, PickerProgress, Position,
     PreparedPane, PreparedRow, PreparedView, PromptKind, Rect, ResourceKind, Selection,
-    SettingType, Side, StashMutation, adjust_scroll, adjust_scroll_wrapped, diff_projection,
-    fold_hiding_row, is_path_separator, move_projected_start_backward, project_aligned_rows,
-    project_visible_rows, selection_for_launch_position,
+    SettingType, Side, StashMutation, adjust_horizontal_scroll, adjust_scroll,
+    adjust_scroll_wrapped, diff_projection, fold_hiding_row, is_path_separator,
+    move_projected_start_backward, project_aligned_rows, project_visible_rows,
+    selection_for_launch_position,
 };
 use crate::keymap::{ActionContext, ContextAction};
 use std::collections::HashSet;
@@ -626,6 +627,18 @@ impl App {
             let buffer = &self.buffers[buffer_id];
             let pane = self.panes.get_mut(&pane_id).unwrap();
             pane.wrap_width = document_text_width;
+            // Effective wrapping is per pane: config edits affect every pane,
+            // while diff panes and documents ineligible for wrapping stay put.
+            let wrap_changed = pane
+                .prepared_soft_wrap
+                .is_some_and(|previous| previous != soft_wrap);
+            pane.prepared_soft_wrap = Some(soft_wrap);
+            let reset =
+                pane.horizontal_reset.take() == Some((pane.buffer, pane.binding_generation));
+            if wrap_changed || reset {
+                pane.scroll_col = 0;
+                pane.horizontal_check = None;
+            }
             if soft_wrap && folds.is_empty() {
                 adjust_scroll_wrapped(
                     pane,
@@ -653,13 +666,8 @@ impl App {
                 pane.scroll_col = 0;
             } else {
                 pane.scroll_wrap = 0;
-                adjust_scroll(
-                    pane,
-                    cursor,
-                    body_height,
-                    document_text_width,
-                    scroll_offset,
-                );
+                adjust_scroll(pane, cursor, body_height, scroll_offset);
+                adjust_horizontal_scroll(pane, buffer, cursor, document_text_width, tab_width);
             }
             if let Some(fold) = fold_hiding_row(&folds, pane.scroll_row) {
                 pane.scroll_row = fold.anchor_row;
