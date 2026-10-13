@@ -157,6 +157,9 @@ them, regardless of which extensibility direction is chosen.
 - **Picker overlay** — a transient choose-one overlay. Printable input filters
   candidates, Enter accepts the selected candidate, and Escape, `Ctrl-c`, or
   an initial effective leader (bare Space by default) cancels the request.
+  The document outline indents names two spaces per parent level, capped at
+  32 spaces. Filtering preserves that source hierarchy and the muted parent
+  breadcrumbs; indentation is presentation only, excluded from search text.
   Every overlay that owns its own typed query — the project finder in all
   three scopes and the filterable
   result lists alike — draws that query on the first line under its title,

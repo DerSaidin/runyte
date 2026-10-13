@@ -2483,16 +2483,20 @@ impl App {
             return Ok(());
         }
 
+        // Outline parents precede their children. Retain each row's depth
+        // even when filtering hides its ancestors, and bound padding so deep
+        // source nesting still leaves room for the name.
+        let mut depths = Vec::with_capacity(outline.items.len());
         let items = outline
             .items
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                PickerItem::new(
-                    item.name.to_string(),
-                    outline_item_detail(&outline.items, index),
-                    index,
-                )
+                let depth = item.parent.map_or(0, |parent| depths[parent] + 1);
+                depths.push(depth);
+                let label = format!("{}{}", "  ".repeat(depth.min(16)), item.name);
+                let detail = outline_item_detail(&outline.items, index);
+                PickerItem::searchable(label, &detail, format!("{} {detail}", item.name), index)
             })
             .collect();
         self.list_actions = outline

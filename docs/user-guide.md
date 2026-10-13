@@ -1624,6 +1624,8 @@ pairs.
   commands and the syntax [text objects](#text-objects) show them with the
   block cursor on the last included character, as in Select mode. Yank,
   delete, change, and indent act on exactly the highlighted span.
+- **Document outline.** Nested entries are indented two spaces per level,
+  up to 32 spaces. Filtering preserves their indentation and parent breadcrumbs.
 - **Folds are per pane.** Two panes may collapse different regions of one
   shared buffer. Any edit clears both panes' folds.
 - **Folded rows** show an accent-coloured `▸` between the line number and the
