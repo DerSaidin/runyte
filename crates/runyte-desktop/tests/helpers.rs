@@ -57,6 +57,41 @@ fn preview_one_shot_and_retained_frames_use_the_desktop_executable() {
     );
     assert!(frame(frame(&retained.stdout)).is_empty());
 }
+/// The first pixel of a Markdown page rendered with `theme`, as RGBA.
+fn markdown_ground(theme: serde_json::Value) -> [u8; 4] {
+    let request = serde_json::to_vec(&serde_json::json!({
+        "text": "# Title\n\nBody text.\n",
+        "language": "markdown", "path": null, "width": 64, "height": 48,
+        "scale": 1, "scroll": [0, 0], "selection": null, "theme": theme
+    }))
+    .unwrap();
+    let output = invoke(&["--helper", "preview"], &request);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(frame(&output.stdout).is_empty());
+    let end = output.stdout.iter().position(|b| *b == b'\n').unwrap();
+    output.stdout[end + 1..end + 5].try_into().unwrap()
+}
+#[test]
+fn preview_pages_take_the_editor_theme_ground_or_stay_white() {
+    let config = runyte::config::Config::default();
+    assert_eq!(markdown_ground(serde_json::Value::Null), [0xff; 4]);
+    for name in config.theme_names() {
+        let theme = config.resolve_theme(name).unwrap();
+        let palette = runyte::document_preview::Palette::from_theme(&theme);
+        let ground = markdown_ground(serde_json::to_value(&palette).unwrap());
+        for channel in 0..3 {
+            assert!(
+                ground[channel].abs_diff(palette.background[channel]) <= 1,
+                "{name}: {ground:?} against {:?}",
+                palette.background
+            );
+        }
+    }
+}
 #[test]
 fn pdf_helper_returns_a_real_page_before_editor_startup() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -26,6 +26,9 @@ struct Request {
     selection: Option<[[f32; 2]; 2]>,
     #[serde(default)]
     adjacent: bool,
+    /// The editor theme for generated pages; absent keeps the light page.
+    #[serde(default)]
+    theme: Option<format::Palette>,
 }
 #[derive(Serialize)]
 struct Reply {
@@ -39,9 +42,18 @@ struct Reply {
     raster_height: u32,
     origin: [f64; 2],
     cacheable: bool,
+    /// Whether the page took the request's theme; authored pages never do.
+    themed: bool,
 }
 fn default_zoom() -> f32 {
     1.0
+}
+/// What `prefers-color-scheme` answers, so authored HTML can follow the theme.
+fn color_scheme(request: &Request) -> ColorScheme {
+    match &request.theme {
+        Some(theme) if theme.dark => ColorScheme::Dark,
+        _ => ColorScheme::Light,
+    }
 }
 
 /// Render bounded newline-delimited requests, retaining document layout between frames.
@@ -83,17 +95,18 @@ pub fn run_once(
     render(serde_json::from_slice(&bytes)?, &mut None, &mut output)
 }
 
-fn build_document(request: &Request) -> HtmlDocument {
+fn build_document(request: &Request) -> (HtmlDocument, bool) {
     let svg_fragment = request.selection_only
         && roxmltree::Document::parse(&request.text)
             .is_ok_and(|doc| doc.root_element().tag_name().name() == "svg");
-    let html = format::document(
+    let page = format::document(
         &request.text,
         if svg_fragment {
             "svg"
         } else {
             &request.language
         },
+        request.theme.as_ref(),
     );
     let root = request
         .path
@@ -106,7 +119,7 @@ fn build_document(request: &Request) -> HtmlDocument {
         .map(|u| u.to_string())
         .or_else(|| Some("https://preview.invalid/".into()));
     let mut doc = HtmlDocument::from_html(
-        &html,
+        &page.html,
         DocumentConfig {
             base_url,
             net_provider: Some(std::sync::Arc::new(assets::LocalImages::new(root))),
@@ -114,7 +127,7 @@ fn build_document(request: &Request) -> HtmlDocument {
                 request.width,
                 request.height,
                 request.scale * request.zoom,
-                ColorScheme::Light,
+                color_scheme(request),
             )),
             ..Default::default()
         },
@@ -167,7 +180,7 @@ fn build_document(request: &Request) -> HtmlDocument {
     doc.resolve(0.0);
     doc.handle_messages();
     doc.resolve(0.0);
-    doc
+    (doc, page.themed)
 }
 
 struct Cache {
@@ -177,6 +190,7 @@ struct Cache {
     pixels: Vec<u8>,
     render_size: [u32; 2],
     cacheable: bool,
+    themed: bool,
 }
 fn viewport_independent(doc: &HtmlDocument) -> bool {
     doc.query_selector_all("*")
@@ -207,6 +221,10 @@ fn render(
         || !(0.25..=4.0).contains(&request.zoom)
         || !request.scale.is_finite()
         || !(0.01..=4.0).contains(&request.scale)
+        || request
+            .theme
+            .as_ref()
+            .is_some_and(|theme| theme.syntax.len() > format::MAX_SYNTAX_SCOPES)
     {
         return Err("preview exceeds input or viewport budget".into());
     }
@@ -216,14 +234,16 @@ fn render(
             && old.language == request.language
             && old.path == request.path
             && old.selection_only == request.selection_only
+            && old.theme == request.theme
     });
     if !same_document {
-        let doc = build_document(&request);
+        let (doc, themed) = build_document(&request);
         let cacheable = viewport_independent(&doc);
         *cache = Some(Cache {
             request: request.clone(),
             doc,
             cacheable,
+            themed,
             renderer: anyrender_vello_cpu::VelloCpuImageRenderer::new(
                 request.width,
                 request.height,
@@ -239,6 +259,7 @@ fn render(
         pixels,
         render_size,
         cacheable,
+        themed,
     } = cache.as_mut().unwrap();
     if old.width != request.width
         || old.height != request.height
@@ -249,7 +270,7 @@ fn render(
             request.width,
             request.height,
             request.scale * request.zoom,
-            ColorScheme::Light,
+            color_scheme(&request),
         ));
         doc.resolve(0.0);
         *cacheable = viewport_independent(doc);
@@ -308,6 +329,7 @@ fn render(
         origin: raster.origin,
         cacheable: adjacent,
         max_scroll: [maximum.x, maximum.y],
+        themed: *themed,
     };
     doc.set_viewport_scroll(blitz_dom::Point {
         x: raster.origin[0],
@@ -337,4 +359,100 @@ fn render(
     out.write_all(pixels)?;
     out.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    fn palette(dark: bool, syntax: usize) -> Value {
+        let ground = if dark {
+            [0x10, 0x20, 0x30]
+        } else {
+            [0xf0, 0xf0, 0xe0]
+        };
+        json!({
+            "dark": dark, "background": ground, "foreground": [0x80, 0x80, 0x80],
+            "muted": [0x80, 0x80, 0x80], "surface": ground, "code": ground,
+            "border": [0x80, 0x80, 0x80], "link": [0x80, 0x80, 0x80],
+            "heading": [0x80, 0x80, 0x80], "error": [0x80, 0x80, 0x80],
+            "syntax": vec![json!(["keyword", [1, 2, 3]]); syntax],
+        })
+    }
+    fn request(text: &str, language: &str, theme: Value) -> Value {
+        json!({
+            "text": text, "language": language, "path": null, "width": 32,
+            "height": 24, "scale": 1, "scroll": [0, 0], "selection": null,
+            "theme": theme,
+        })
+    }
+    /// Each reply header with the first RGBA pixel of its raster.
+    fn serve(requests: &[Value]) -> Result<Vec<(Value, [u8; 4])>, String> {
+        let mut input = Vec::new();
+        for request in requests {
+            serde_json::to_writer(&mut input, request).unwrap();
+            input.push(b'\n');
+        }
+        let mut output = Vec::new();
+        super::serve(&input[..], &mut output).map_err(|e| e.to_string())?;
+        let mut frames = Vec::new();
+        let mut rest = &output[..];
+        while !rest.is_empty() {
+            let end = rest.iter().position(|b| *b == b'\n').unwrap();
+            let header: Value = serde_json::from_slice(&rest[..end]).unwrap();
+            let pixels = header["raster_width"].as_u64().unwrap()
+                * header["raster_height"].as_u64().unwrap()
+                * 4;
+            let pixel = rest[end + 1..end + 5].try_into().unwrap();
+            rest = &rest[end + 1 + pixels as usize..];
+            frames.push((header, pixel));
+        }
+        Ok(frames)
+    }
+
+    #[test]
+    fn theme_change_rebuilds_the_retained_document() {
+        let frames = serve(&[
+            request("# Title", "markdown", Value::Null),
+            request("# Title", "markdown", palette(true, 1)),
+            request("# Title", "markdown", Value::Null),
+        ])
+        .unwrap();
+        let summary = frames
+            .iter()
+            .map(|(header, pixel)| (header["themed"].as_bool().unwrap(), *pixel))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                (false, [0xff; 4]),
+                (true, [0x10, 0x20, 0x30, 0xff]),
+                (false, [0xff; 4]),
+            ]
+        );
+    }
+
+    #[test]
+    fn authored_html_answers_prefers_color_scheme_without_taking_the_theme() {
+        let html = "<style>@media (prefers-color-scheme: dark) \
+                    { html { background: #000000 } }</style><p>x</p>";
+        let frames = serve(&[
+            request(html, "html", palette(true, 0)),
+            request(html, "html", palette(false, 0)),
+            request(html, "html", Value::Null),
+        ])
+        .unwrap();
+        assert!(frames.iter().all(|(header, _)| header["themed"] == false));
+        assert_eq!(frames[0].1, [0, 0, 0, 0xff]);
+        // Unstyled authored pages stay transparent over the frontend's white ground.
+        assert_eq!(frames[1].1[3], 0);
+        assert_eq!(frames[2].1[3], 0);
+    }
+
+    #[test]
+    fn oversized_scope_lists_are_refused() {
+        let limit = super::format::MAX_SYNTAX_SCOPES;
+        assert!(serve(&[request("x", "text", palette(true, limit))]).is_ok());
+        assert!(serve(&[request("x", "text", palette(true, limit + 1))]).is_err());
+    }
 }

@@ -206,7 +206,8 @@ use crate::workspace::{
 // Version 76 adds native document preview captures.
 // Version 77 adds generation-checked dismissal of those captures.
 // Version 78 adds a correlated post-input snapshot for bundled window routing.
-pub const VERSION: u32 = 78;
+// Version 79 carries the live document-preview theme colour setting.
+pub const VERSION: u32 = 79;
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PATHS: usize = 32;
 pub const MAX_PATH_BYTES: usize = 32 * 1024;
@@ -1563,7 +1564,7 @@ mod tests {
 
     #[test]
     fn protocol_version_and_request_bounds_are_explicit() {
-        assert_eq!(VERSION, 78);
+        assert_eq!(VERSION, 79);
         let oversized_command = ClientRequest::Invoke {
             command: CommandRequest {
                 name: "open".to_owned(),

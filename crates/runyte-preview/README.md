@@ -11,10 +11,10 @@ cargo build --locked --release -p runyte-desktop
 ./target/release/runyte-desktop --window --editor crates/runyte-preview/fixtures/markdown.md
 ```
 
-The dismissal fix uses private client/host protocol 77. Before upgrading an
-existing persistent session, save work and stop it using its compatible client,
-then relaunch with the rebuilt binary. Restarting only the window is insufficient
-when its host still runs the old binary.
+The live preview-theme setting uses private client/host protocol 79. Before
+upgrading an existing persistent session, save work and stop it using its
+compatible client, then relaunch with the rebuilt binary. Restarting only the
+window is insufficient when its host still runs the old binary.
 
 The desktop executable links the engine and runs it in a bounded child using
 `--helper preview --serve`. There is one workspace lockfile; the terminal
@@ -90,8 +90,20 @@ fragments become active document markup.
 
 `preview.css` is a bundled, Runyte-authored MPL-2.0 stylesheet inspired by GitHub's
 reading layout. It is not GitHub's stylesheet and does not provide exact GitHub
-rendering equivalence. Proportional and code fonts currently use system fonts;
-no additional font is bundled by the helper.
+rendering equivalence.
+
+With `editor.preview_theme_colors` on (the default), a request carries the
+editor theme as sRGB channels: ground, text, muted, surface, inline code,
+border, link, heading and error colours, plus the colour of each Runyte syntax
+scope. The helper layers colour overrides over `preview.css` and highlights
+code with a Syntect theme built from those scopes, mapped onto the TextMate
+selectors Syntect's grammars use. Colours reach the page only through
+formatted channels, never as request text. Authored HTML and valid SVG are not
+recoloured; `prefers-color-scheme` reports the theme's appearance. Without a
+theme the page is the original light layout with InspiredGitHub highlighting.
+Each reply says whether the page was themed, so the native view paints the
+ground around it, its link bar and key hints to match. Proportional and code
+fonts currently use system fonts; no additional font is bundled by the helper.
 
 ## Supported static subset and resource policy
 

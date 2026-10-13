@@ -16,6 +16,8 @@ pub(super) struct Pane {
     pub active: bool,
     pub body: runyte::layout::Rect,
     pub document: runyte::document_preview::DocumentPreview,
+    /// The editor theme's colours, or `None` for the original light page.
+    pub palette: Option<runyte::document_preview::Palette>,
 }
 #[derive(Clone, Serialize, PartialEq)]
 struct Request {
@@ -30,6 +32,7 @@ struct Request {
     scroll: [f64; 2],
     selection: Option<[[f32; 2]; 2]>,
     adjacent: bool,
+    theme: Option<runyte::document_preview::Palette>,
 }
 #[derive(Deserialize)]
 struct Reply {
@@ -43,10 +46,13 @@ struct Reply {
     raster_height: u32,
     origin: [f64; 2],
     cacheable: bool,
+    #[serde(default)]
+    themed: bool,
 }
 struct Output {
     scale: f32,
     zoom: f32,
+    theme: Option<runyte::document_preview::Palette>,
     reply: Reply,
     image: Arc<RenderImage>,
 }
@@ -56,6 +62,7 @@ impl Output {
             && self.reply.height == request.height
             && self.scale == request.scale
             && self.zoom == request.zoom
+            && self.theme == request.theme
     }
     fn display_scroll(&self, target: [f64; 2]) -> [f64; 2] {
         if !self.reply.cacheable {
@@ -262,6 +269,49 @@ pub(super) struct Views {
     worker: Option<(mpsc::SyncSender<Job>, mpsc::Receiver<Done>)>,
     attachment: u64,
 }
+/// The palette the layer around a page should follow. Authored HTML and SVG
+/// keep their own appearance and leave unpainted pixels transparent, so they
+/// need the white ground they had before themes; the helper's reply says
+/// which kind of page it drew, and the language stands in until it arrives.
+fn page_palette<'a>(
+    pane: &'a Pane,
+    displayed: Option<Result<&Output, &String>>,
+) -> Option<&'a runyte::document_preview::Palette> {
+    let themed = match displayed {
+        Some(Ok(output)) => output.reply.themed,
+        _ => !matches!(pane.document.language.as_str(), "html" | "svg"),
+    };
+    pane.palette.as_ref().filter(|_| themed)
+}
+/// The colours the frontend paints around and over a document raster:
+/// its ground before the first frame, progress and failure text, and the
+/// link and key-hint bars. They follow the page the helper renders.
+#[derive(Debug, PartialEq)]
+struct LayerColours {
+    ground: u32,
+    text: u32,
+    link: u32,
+    error: u32,
+}
+impl LayerColours {
+    fn new(palette: Option<&runyte::document_preview::Palette>) -> Self {
+        let value = |[red, green, blue]: [u8; 3]| u32::from_be_bytes([0, red, green, blue]);
+        match palette {
+            Some(palette) => Self {
+                ground: value(palette.background),
+                text: value(palette.foreground),
+                link: value(palette.link),
+                error: value(palette.error),
+            },
+            None => Self {
+                ground: 0xffffff,
+                text: 0x333333,
+                link: 0x0969da,
+                error: 0x990000,
+            },
+        }
+    }
+}
 // Retain logical layout and hit coordinates while bounding the physical raster.
 fn raster_viewport(width: f32, height: f32, display_scale: f32) -> (u32, u32, f32) {
     let width = f64::from(width.max(1.0));
@@ -395,6 +445,7 @@ fn render_request(
     Ok(Output {
         scale: request.scale,
         zoom: request.zoom,
+        theme: request.theme.clone(),
         reply,
         image: Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])),
     })
@@ -558,6 +609,7 @@ impl NativeView {
                 scroll: state.scroll,
                 selection: state.selection,
                 adjacent: pane.active,
+                theme: pane.palette.clone(),
             };
             if request.selection.is_none()
                 && state.cache.as_ref().is_some_and(|cache| {
@@ -600,14 +652,6 @@ impl NativeView {
         for pane in &frame.previews {
             let state = &self.previews.states[&pane.pane];
             let area = pane.body;
-            let mut layer = div()
-                .absolute()
-                .left(px(area.x as f32 * self.metrics.width))
-                .top(px(area.y as f32 * self.metrics.height))
-                .w(px(area.width as f32 * self.metrics.width))
-                .h(px(area.height as f32 * self.metrics.height))
-                .overflow_hidden()
-                .bg(rgb(0xffffff));
             let cached = state.cache.as_ref().filter(|cache| {
                 state.selection.is_none()
                     && state
@@ -618,6 +662,18 @@ impl NativeView {
             let displayed = cached
                 .map(Ok)
                 .or_else(|| state.output.as_ref().map(|result| result.as_ref()));
+            let colours = LayerColours::new(page_palette(
+                pane,
+                displayed.map(|result| result.map(|output| &**output)),
+            ));
+            let mut layer = div()
+                .absolute()
+                .left(px(area.x as f32 * self.metrics.width))
+                .top(px(area.y as f32 * self.metrics.height))
+                .w(px(area.width as f32 * self.metrics.width))
+                .h(px(area.height as f32 * self.metrics.height))
+                .overflow_hidden()
+                .bg(rgb(colours.ground));
             layer = match displayed {
                 Some(Ok(output)) => {
                     images.push(output.image.clone());
@@ -635,13 +691,16 @@ impl NativeView {
                             .h(px(output.reply.raster_height as f32 / output.scale)),
                     )
                 }
-                Some(Err(error)) => {
-                    layer.child(div().p_4().text_color(rgb(0x990000)).child(error.clone()))
-                }
+                Some(Err(error)) => layer.child(
+                    div()
+                        .p_4()
+                        .text_color(rgb(colours.error))
+                        .child(error.clone()),
+                ),
                 None => layer.child(
                     div()
                         .p_4()
-                        .text_color(rgb(0x333333))
+                        .text_color(rgb(colours.text))
                         .child("Preparing document preview… Escape returns to source"),
                 ),
             };
@@ -655,8 +714,8 @@ impl NativeView {
                         .absolute()
                         .bottom_0()
                         .left_0()
-                        .bg(rgb(0xffffff))
-                        .text_color(rgb(0x0969da))
+                        .bg(rgb(colours.ground))
+                        .text_color(rgb(colours.link))
                         .child(format!("Link: {link} (navigation disabled)")),
                 );
             }
@@ -667,8 +726,8 @@ impl NativeView {
                         .bottom_0()
                         .left_0()
                         .right_0()
-                        .bg(rgb(0xffffff))
-                        .text_color(rgb(0x0969da))
+                        .bg(rgb(colours.ground))
+                        .text_color(rgb(colours.link))
                         .child(navigation_hints(&state.keys)),
                 );
             }

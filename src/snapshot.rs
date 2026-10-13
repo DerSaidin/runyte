@@ -168,6 +168,8 @@ pub struct EditorSnapshot {
     pub geometry: crate::app::FrameGeometry,
     pub theme: Theme,
     pub terminal_theme_colors: bool,
+    /// Whether `:preview` documents follow `theme` rather than a fixed light page.
+    pub preview_theme_colors: bool,
     pub mode: Mode,
     pub directory_tree: Option<DirectoryTreeSnapshot>,
     pub panes: Vec<PaneSnapshot>,
@@ -959,6 +961,7 @@ impl App {
                 .map(|strip| strip.snapshot.clone()),
             theme: self.theme.clone(),
             terminal_theme_colors: self.config.editor.terminal_theme_colors,
+            preview_theme_colors: self.config.editor.preview_theme_colors,
             mode: self.mode,
             panes,
             status: StatusSnapshot {

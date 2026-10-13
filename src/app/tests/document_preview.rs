@@ -186,3 +186,27 @@ fn dismissing_a_preview_removes_host_capture_without_changing_source() {
     assert!(app.document_previews[&pane].generation > current);
     assert!(!app.dismiss_document_preview(pane, current));
 }
+#[test]
+fn preview_theme_setting_reaches_frames_live_without_recapturing() {
+    use crate::settings::{SettingId, SettingValue};
+    let root = TestRuntimeRoot::new("preview-theme").unwrap();
+    let path = root.join("notes.md");
+    fs::write(&path, "# Notes\n").unwrap();
+    let mut app = App::new_in_project(Config::default(), None, &*root).unwrap();
+    app.native_media = true;
+    app.open_file(path).unwrap();
+    app.execute(parse_colon_command("preview").unwrap())
+        .unwrap();
+    let capture = app.document_previews[&app.active_pane].clone();
+    let mut host = crate::workspace::WorkspaceHost::new(app);
+    let geometry = crate::ui::frame_geometry(ratatui::layout::Rect::new(0, 0, 80, 24));
+    assert!(host.prepare_frame(geometry).editor.preview_theme_colors);
+    for enabled in [false, true] {
+        SettingId::EditorPreviewThemeColors
+            .apply(&SettingValue::Boolean(enabled), &mut host.config)
+            .unwrap();
+        let frame = host.prepare_frame(geometry);
+        assert_eq!(frame.editor.preview_theme_colors, enabled);
+        assert_eq!(frame.editor.panes[0].preview.as_ref(), Some(&capture));
+    }
+}

@@ -61,6 +61,7 @@ pub enum SettingId {
     EditorSelectingMotions,
     EditorCommandModeDim,
     EditorTerminalThemeColors,
+    EditorPreviewThemeColors,
     EditorAutoCloseTerminal,
     RunMode,
     SessionStrip,
@@ -392,6 +393,15 @@ const DESCRIPTORS: &[SettingDescriptor] = &[
         persistence: PersistencePolicy::ConfigFile,
     },
     SettingDescriptor {
+        id: SettingId::EditorPreviewThemeColors,
+        key: "editor.preview_theme_colors",
+        title: "Preview theme colors",
+        description: "Use the active theme for documents shown by :preview",
+        value_type: SettingType::Boolean,
+        preview: PreviewPolicy::Immediate,
+        persistence: PersistencePolicy::ConfigFile,
+    },
+    SettingDescriptor {
         id: SettingId::EditorAutoCloseTerminal,
         key: "editor.auto_close_terminal",
         title: "Auto close terminal",
@@ -505,6 +515,7 @@ impl SettingId {
         Self::EditorSelectingMotions,
         Self::EditorCommandModeDim,
         Self::EditorTerminalThemeColors,
+        Self::EditorPreviewThemeColors,
         Self::EditorAutoCloseTerminal,
         Self::RunMode,
         Self::SessionStrip,
@@ -579,6 +590,9 @@ impl SettingId {
             }
             Self::EditorTerminalThemeColors => {
                 SettingValue::Boolean(config.editor.terminal_theme_colors)
+            }
+            Self::EditorPreviewThemeColors => {
+                SettingValue::Boolean(config.editor.preview_theme_colors)
             }
             Self::EditorCommandModeDim => SettingValue::Boolean(config.editor.command_mode_dim),
             Self::Theme => SettingValue::Text(
@@ -745,6 +759,9 @@ impl SettingId {
             }
             (Self::EditorTerminalThemeColors, SettingValue::Boolean(value)) => {
                 config.editor.terminal_theme_colors = *value;
+            }
+            (Self::EditorPreviewThemeColors, SettingValue::Boolean(value)) => {
+                config.editor.preview_theme_colors = *value;
             }
             (Self::Theme, SettingValue::Text(value)) => config.theme = Some(value.clone()),
             (Self::LspEnable, SettingValue::Boolean(value)) => config.lsp.enable = *value,

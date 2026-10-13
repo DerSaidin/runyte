@@ -365,6 +365,13 @@ fn capture_snapshot_media(snapshot: &runyte::workspace::HostFrame, counts: &[med
             })
         })
         .collect();
+    let palette = (snapshot.editor.preview_theme_colors
+        && snapshot
+            .editor
+            .panes
+            .iter()
+            .any(|pane| pane.preview.is_some()))
+    .then(|| runyte::document_preview::Palette::from_theme(&snapshot.editor.theme));
     *bridge.previews.lock().unwrap() = snapshot
         .editor
         .panes
@@ -376,6 +383,7 @@ fn capture_snapshot_media(snapshot: &runyte::workspace::HostFrame, counts: &[med
                 active: pane.active,
                 body: pane.body,
                 document: pane.preview.clone()?,
+                palette: palette.clone(),
             })
         })
         .collect();
