@@ -33,7 +33,7 @@ fn write_config_writes_the_whole_effective_configuration_to_a_given_path() {
     let directory = scratch("given");
     let mut app = editor(
         &directory,
-        "# a comment the copy does not keep\neditor:\n  tab_width: 2\ntheme: light\nkeys:\n  leader: Ctrl-x\n",
+        "# a comment the copy does not keep\neditor:\n  tab_width: 2\ntheme: mine\nthemes:\n  mine:\n    accent: '#123456'\nkeys:\n  leader: Ctrl-x\n  bind:\n    normal:\n      F5: save\n",
     );
     let target = directory.join("nested").join("written.yaml");
 
@@ -42,27 +42,51 @@ fn write_config_writes_the_whole_effective_configuration_to_a_given_path() {
 
     assert!(!app.status_error, "{}", app.status);
     assert!(
-        app.status.contains("wrote configuration to"),
+        app.status.contains("wrote configuration to")
+            && app.status.contains("and 6 files beside it"),
         "{}",
         app.status
     );
+    let beside = |relative: &str| fs::read_to_string(directory.join("nested").join(relative));
     let text = fs::read_to_string(&target).unwrap();
     assert!(!text.contains("a comment"), "{text}");
-    // Every built-in theme and language server is written, not only the
-    // values the loaded file named.
-    assert!(
-        text.contains(&format!("  {}:\n", crate::config::DEFAULT_THEME)),
-        "{text}"
-    );
+    // Themes and keys have files of their own; every language server is
+    // still written in the configuration file.
+    assert!(!text.contains("\nthemes:"), "{text}");
+    assert!(!text.contains("\nkeys:"), "{text}");
     assert!(text.contains("\nlsp:\n  enable:"), "{text}");
     assert!(!text.contains("servers:"), "{text}");
+    assert!(text.contains("\ntheme: mine\n"), "{text}");
+    assert!(
+        beside("themes.d/mine.yaml")
+            .unwrap()
+            .contains("accent: '#123456'")
+    );
+    assert!(
+        beside(&format!("themes.d/{}.yaml", crate::config::DEFAULT_THEME)).is_err(),
+        "built-in themes are not written"
+    );
+    assert_eq!(
+        beside("keybinds.d/00-prefixes.yaml").unwrap(),
+        "leader: Ctrl-x\n"
+    );
+    // Every built-in key is spelled out, under the configured leader, with
+    // the configured binding among them.
+    let normal = beside("keybinds.d/normal.yaml").unwrap();
+    assert!(normal.starts_with("bind:\n  normal:\n"), "{normal}");
+    assert!(normal.contains("\n    w: move-word-forward\n"), "{normal}");
+    assert!(normal.contains("\n    F5: save\n"), "{normal}");
+    assert!(!normal.contains("\n    Space "), "{normal}");
+    for mode in ["select", "insert", "replace"] {
+        assert!(beside(&format!("keybinds.d/{mode}.yaml")).is_ok(), "{mode}");
+    }
+
     let (written, _) = Config::load(Some(&target)).unwrap();
     assert_eq!(written.editor.tab_width, 2);
-    assert_eq!(written.theme.as_deref(), Some("light"));
-    assert_eq!(
-        written.to_yaml().unwrap(),
-        app.persisted_config.to_yaml().unwrap()
-    );
+    assert_eq!(written.theme.as_deref(), Some("mine"));
+    assert_eq!(written.themes["mine"].accent, "#123456");
+    let keys = compile_configured_keymaps(written.keys.as_ref());
+    assert!(keys.errors.is_empty(), "{:?}", keys.errors);
     fs::remove_dir_all(directory).unwrap();
 }
 

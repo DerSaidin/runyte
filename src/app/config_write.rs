@@ -7,6 +7,11 @@
 //! the editor existed and changed since: the running editor keeps its launch
 //! value, but the file should carry the choice that was made, or writing it
 //! back over the loaded file would quietly undo that choice.
+//!
+//! Custom themes and the `keys` section are written as files of their own
+//! beside the configuration file, in `themes.d` and `keybinds.d`. The keys are
+//! the whole effective keymap spelled out under `bind`, one file per mode, so
+//! every key that does something is listed and each can be changed in place.
 
 use std::path::PathBuf;
 
@@ -26,8 +31,21 @@ impl App {
             );
             return;
         };
-        match write_config(&target, &self.persisted_config, replace) {
-            Ok(()) => self.status(format!("wrote configuration to {}", target.display())),
+        let mut config = self.persisted_config.clone();
+        config.keys = Some(crate::keymap::actions::effective_section(
+            config.keys.as_ref(),
+        ));
+        match write_config(&target, &config, replace) {
+            Ok(written) => {
+                let beside = written.len().saturating_sub(1);
+                self.status(format!(
+                    "wrote configuration to {} and {beside} file{} beside it in {} and {}",
+                    target.display(),
+                    if beside == 1 { "" } else { "s" },
+                    crate::config::THEMES_DIRECTORY,
+                    crate::config::KEYBINDS_DIRECTORY,
+                ))
+            }
             Err(SettingError::AlreadyExists(path)) => self.action_warning(
                 "Configuration not written",
                 format!(

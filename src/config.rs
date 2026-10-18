@@ -16,12 +16,14 @@ use crate::notification::DEFAULT_HISTORY_LIMIT;
 mod catppuccin;
 mod core_themes;
 mod everforest;
+mod fragments;
 mod nightfox;
 mod one_off;
 mod paths;
 mod terminal_palette;
 mod zenbones;
 
+pub use fragments::{KEYBINDS_DIRECTORY, PREFIXES_FILE, THEMES_DIRECTORY};
 pub use paths::default_config_root;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,7 +54,10 @@ pub struct Config {
     /// so configuration remains the single source of truth.
     #[serde(serialize_with = "serialize_effective_theme")]
     pub theme: Option<String>,
-    #[serde(serialize_with = "serialize_sorted")]
+    #[serde(
+        serialize_with = "serialize_custom_themes",
+        skip_serializing_if = "only_built_in_themes"
+    )]
     pub themes: HashMap<String, ThemeDefinition>,
 }
 
@@ -72,6 +77,29 @@ fn serialize_effective_theme<S: Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(theme.as_deref().unwrap_or(DEFAULT_THEME))
+}
+
+/// Writes only the themes a load would not supply by itself: new ones, and
+/// built-in names whose definition was changed. Every built-in is merged back
+/// in when the file is read, so writing them too would only bury the themes
+/// someone actually made.
+fn serialize_custom_themes<S: Serializer>(
+    themes: &HashMap<String, ThemeDefinition>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    custom_themes(themes).serialize(serializer)
+}
+
+fn custom_themes(themes: &HashMap<String, ThemeDefinition>) -> BTreeMap<&String, &ThemeDefinition> {
+    let built_in = built_in_themes();
+    themes
+        .iter()
+        .filter(|(name, theme)| built_in.get(*name) != Some(*theme))
+        .collect()
+}
+
+fn only_built_in_themes(themes: &HashMap<String, ThemeDefinition>) -> bool {
+    custom_themes(themes).is_empty()
 }
 
 /// Writes a map in key order, so the same configuration always produces the
@@ -1198,7 +1226,15 @@ impl Config {
         match fs::symlink_metadata(&path) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((Self::default(), Some(path)));
+                // Themes and key files can stand without a configuration
+                // file beside them.
+                let mut config = Self::default();
+                config.merge_fragments(&path)?;
+                config
+                    .validate_settings()
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("invalid settings beside {}", path.display()))?;
+                return Ok((config, Some(path)));
             }
             Err(error) => {
                 return Err(error)
@@ -1240,12 +1276,14 @@ impl Config {
         Self::read(path).map(Some)
     }
 
-    /// The one parse, merge, and validation path every load shares.
+    /// The one parse, merge, and validation path every load shares: the file,
+    /// then `themes.d` and `keybinds.d` beside it, then the built-ins.
     fn read(path: &Path) -> Result<Self> {
         let source = Self::read_source(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
         let mut config: Self = serde_yaml::from_str(&source)
             .with_context(|| format!("invalid YAML in {}", path.display()))?;
+        config.merge_fragments(path)?;
         config.merge_builtin_defaults();
         config
             .validate_settings()
