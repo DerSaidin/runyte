@@ -3,7 +3,8 @@
 //! Bounded semantic action bindings layered over the resolved keymap.
 
 use super::{
-    Binding, BindingAvailability, BindingScope, BindingTarget, Key, KeySequence, Keymap, validate,
+    Binding, BindingAvailability, BindingNamespace, BindingScope, BindingTarget, Key, KeySequence,
+    Keymap, validate,
 };
 use crate::command::{self, CommandId, CommandInvocation, EditorCommand, Mode};
 use crate::input::KeyCode;
@@ -247,6 +248,106 @@ struct Rule {
     description: String,
 }
 
+/// Keeps each namespace only in the modes where some binding still continues
+/// it, so a prefix whose keys were all removed stops being advertised.
+fn prune_namespaces(
+    namespaces: Vec<BindingNamespace>,
+    bindings: &[Binding],
+) -> Vec<BindingNamespace> {
+    namespaces
+        .into_iter()
+        .flat_map(|namespace| {
+            namespace
+                .modes
+                .iter()
+                .filter(|&&mode| {
+                    bindings.iter().any(|binding| {
+                        binding.visible_in(mode, namespace.scope)
+                            && (binding.scope == BindingScope::Global
+                                || binding.scope == namespace.scope)
+                            && binding.sequence != namespace.sequence
+                            && binding.sequence.starts_with(&namespace.sequence)
+                    })
+                })
+                .map(|&mode| {
+                    let mut copy = namespace.clone();
+                    copy.modes = mode_slice(mode);
+                    copy
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Whether `keys.bind` can recreate `binding` in `mode`: an implemented
+/// built-in action, on a key the grammar does not keep for itself.
+fn is_expressible(binding: &Binding, mode: Mode) -> bool {
+    binding.availability == BindingAvailability::Implemented
+        && !matches!(binding.target, BindingTarget::Plugin(_))
+        && binding.sequence.len() <= 8
+        && !is_reserved(mode, &binding.sequence)
+        && parse_action(&Value::String(binding.target.name().into()), mode).is_ok()
+}
+
+/// `keymap` without the built-in global bindings `keys.bind` could recreate,
+/// for `keys.defaults: false`. What it cannot recreate stays, since nothing
+/// else could supply it: keys the grammar reserves, bindings outside the four
+/// bindable modes, and every scoped binding of a special buffer, list or
+/// terminal.
+pub(super) fn without_defaults(mut keymap: Keymap) -> Keymap {
+    keymap.bindings = keymap
+        .bindings
+        .into_iter()
+        .flat_map(|binding| {
+            let dropped = BIND_MODES
+                .into_iter()
+                .filter(|&mode| {
+                    binding.scope == BindingScope::Global
+                        && binding.is_active_in(mode)
+                        && is_expressible(&binding, mode)
+                })
+                .collect::<Vec<_>>();
+            if dropped.is_empty() {
+                return vec![binding];
+            }
+            binding
+                .modes
+                .iter()
+                .filter(|mode| !dropped.contains(mode))
+                .map(|&mode| {
+                    let mut copy = binding.clone();
+                    copy.modes = mode_slice(mode);
+                    copy
+                })
+                .collect()
+        })
+        .collect();
+    keymap.namespaces = prune_namespaces(std::mem::take(&mut keymap.namespaces), &keymap.bindings);
+    keymap.rebuild_lookup_index();
+    keymap
+}
+
+/// What a keymap without the defaults lacks to be left again: the command
+/// palette in Normal mode, from which every command and the configuration can
+/// be reached, and a way back to Normal mode from the other three.
+pub(super) fn missing_way_out(keymap: &Keymap) -> Option<String> {
+    let reaches = |mode, command| {
+        keymap
+            .global_sequence_for(mode, BindingTarget::Editor(command))
+            .is_some()
+    };
+    let mut missing = Vec::new();
+    if !reaches(Mode::Normal, EditorCommand::OpenCommandPalette) {
+        missing.push("open-command-palette in normal".to_owned());
+    }
+    for mode in [Mode::Select, Mode::Insert, Mode::Replace] {
+        if !reaches(mode, EditorCommand::EnterNormalMode) {
+            missing.push(format!("enter-normal-mode in {}", mode_name(mode)));
+        }
+    }
+    (!missing.is_empty()).then(|| missing.join(", "))
+}
+
 /// Whether `sequence` uses a key the grammar keeps for itself in `mode`.
 fn is_reserved(mode: Mode, sequence: &KeySequence) -> bool {
     sequence.as_slice().iter().enumerate().any(|(index, key)| {
@@ -480,30 +581,7 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
                 }
             }
         }
-        candidate.namespaces = candidate
-            .namespaces
-            .into_iter()
-            .flat_map(|namespace| {
-                namespace
-                    .modes
-                    .iter()
-                    .filter(|&&mode| {
-                        snapshot.iter().any(|binding| {
-                            binding.visible_in(mode, namespace.scope)
-                                && (binding.scope == namespace.scope
-                                    || binding.scope == BindingScope::Global)
-                                && binding.sequence != namespace.sequence
-                                && binding.sequence.starts_with(&namespace.sequence)
-                        })
-                    })
-                    .map(|&mode| {
-                        let mut copy = namespace.clone();
-                        copy.modes = mode_slice(mode);
-                        copy
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        candidate.namespaces = prune_namespaces(candidate.namespaces, &snapshot);
         let violations = validate::validate(
             &candidate.bindings,
             &candidate.namespaces,
@@ -560,10 +638,17 @@ pub(crate) fn default_bindings(section: Option<&Value>) -> BTreeMap<&'static str
         .cloned()
         .unwrap_or_default();
     let own_bind = section.remove("bind");
+    let mut bind = BTreeMap::new();
+    // `keys.defaults: false` leaves no built-in binding underneath to suggest.
+    if section.get("defaults") == Some(&Value::Bool(false)) {
+        for mode in BIND_MODES {
+            bind.insert(mode_name(mode), Mapping::new());
+        }
+        return bind;
+    }
     let keymap =
         super::configured::compile(&Value::Mapping(section), &super::keymap_for(false)).keymap;
 
-    let mut bind = BTreeMap::new();
     for mode in BIND_MODES {
         let own = own_bind
             .as_ref()
@@ -577,19 +662,14 @@ pub(crate) fn default_bindings(section: Option<&Value>) -> BTreeMap<&'static str
         let mut entries = BTreeMap::new();
         for binding in keymap.bindings_for_mode(mode) {
             let sequence = &binding.sequence;
-            if !binding.actions.is_empty()
-                || binding.availability != BindingAvailability::Implemented
-                || matches!(binding.target, BindingTarget::Plugin(_))
-                || sequence.len() > 8
-                || claimed.contains(sequence)
-                || is_reserved(mode, sequence)
-                || matches!(sequence.as_slice(), [key] if super::is_fast_pane_key(*key))
+            if binding.actions.is_empty()
+                && !claimed.contains(sequence)
+                && !matches!(sequence.as_slice(), [key] if super::is_fast_pane_key(*key))
+                && is_expressible(binding, mode)
             {
-                continue;
-            }
-            let action = Value::String(binding.target.name().into());
-            if parse_action(&action, mode).is_ok() {
-                entries.entry(sequence.to_string()).or_insert(action);
+                entries
+                    .entry(sequence.to_string())
+                    .or_insert_with(|| Value::String(binding.target.name().into()));
             }
         }
         let written = entries
@@ -746,6 +826,9 @@ mod tests {
             Some(
                 "leader: Ctrl-x\nwindow: Ctrl-a\nrebind:\n  Space g: Leader G\nbind:\n  normal:\n    J: null\n    F6: [select-all, yank]\n    Leader q: { command: pipe, argument: sort }\n  insert:\n    Ctrl-s: save\n",
             ),
+            Some(
+                "defaults: false\nleader: Ctrl-x\nbind:\n  normal:\n    ':': open-command-palette\n    Leader h: move-down\n  select:\n    Esc: enter-normal-mode\n  insert:\n    Esc: enter-normal-mode\n  replace:\n    Esc: enter-normal-mode\n",
+            ),
         ];
         for source in sections {
             let section = source.map(|source| serde_yaml::from_str(source).unwrap());
@@ -761,12 +844,22 @@ mod tests {
                 .map(|(_, text)| text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert!(text.contains("#     w: move-word-forward\n"), "{text}");
+            // Without the defaults there is nothing built in to suggest: the
+            // written section is the configured one.
+            let standalone = source.is_some_and(|source| source.starts_with("defaults: false"));
+            assert_eq!(
+                text.contains("#     w: move-word-forward\n"),
+                !standalone,
+                "{text}"
+            );
             let mut written = crate::config::Config::default();
             for (path, text) in &files {
                 if path.starts_with(crate::config::KEYBINDS_DIRECTORY) {
                     written.merge_keys_source(text).unwrap();
                 }
+            }
+            if standalone {
+                assert_eq!(written.keys, section, "{text}");
             }
             let empty = serde_yaml::Value::Mapping(Default::default());
             for fast in [false, true] {

@@ -32,6 +32,9 @@ struct Rebind {
 
 #[derive(Clone, Debug, Default)]
 struct Parsed {
+    /// `keys.defaults: false`: the built-in global bindings `bind` could
+    /// recreate are left out, so `bind` is the whole of them.
+    standalone: bool,
     leader: Option<(String, KeyStroke)>,
     window: Option<(String, KeyStroke)>,
     rebinds: Vec<Rebind>,
@@ -79,6 +82,14 @@ pub fn compile(section: &Value, built_in: &Keymap) -> CompiledKeymap {
             errors,
         };
     };
+    if parsed.standalone {
+        for rule in parsed.rebinds.drain(..) {
+            errors.push(format!(
+                "rebind {:?} ignored: keys.defaults is false, so there is no built-in binding to move",
+                rule.source
+            ));
+        }
+    }
     admit_rebinds(&mut parsed, built_in, &mut errors);
 
     let mut active = parsed
@@ -188,7 +199,28 @@ pub fn compile(section: &Value, built_in: &Keymap) -> CompiledKeymap {
         .with_context_actions(built_in.all_context_actions().to_vec())
         .with_fast_pane_keys_enabled(built_in.fast_pane_keys())
         .with_spelling_metadata(resolution.leader, resolution.window, resolution.spelling);
+    let keymap = if parsed.standalone {
+        super::actions::without_defaults(keymap)
+    } else {
+        keymap
+    };
     let keymap = super::actions::apply(section.get("bind"), keymap, &mut errors);
+    if parsed.standalone
+        && let Some(missing) = super::actions::missing_way_out(&keymap)
+    {
+        // A keymap that cannot be left would lock someone out of the editor
+        // they need to repair it, so the built-in bindings stay underneath.
+        let mut overlay = section.as_mapping().cloned().unwrap_or_default();
+        overlay.remove("defaults");
+        let mut compiled = compile(&Value::Mapping(overlay), built_in);
+        compiled.errors.insert(
+            0,
+            format!(
+                "defaults: false rejected: bind has no {missing}; the built-in bindings were kept"
+            ),
+        );
+        return compiled;
+    }
     CompiledKeymap {
         keymap: Arc::new(keymap),
         errors,
@@ -205,7 +237,7 @@ fn parse_section(section: &Value, errors: &mut Vec<String>) -> Option<Parsed> {
             errors.push("keys section rejected: member names must be strings".to_owned());
             return None;
         };
-        if !matches!(key, "leader" | "window" | "rebind" | "bind") {
+        if !matches!(key, "leader" | "window" | "rebind" | "bind" | "defaults") {
             errors.push(format!("keys section rejected: unknown member {key:?}"));
             return None;
         }
@@ -272,6 +304,14 @@ fn parse_section(section: &Value, errors: &mut Vec<String>) -> Option<Parsed> {
     }
 
     let mut parsed = Parsed::default();
+    match mapping.get(Value::String("defaults".to_owned())) {
+        None | Some(Value::Bool(true)) => {}
+        Some(Value::Bool(false)) => parsed.standalone = true,
+        Some(_) => {
+            errors.push("keys section rejected: defaults must be true or false".to_owned());
+            return None;
+        }
+    }
     if let Some(source) = leader_source {
         match parse_named_prefix("leader", &source, false) {
             Ok(key) => parsed.leader = Some((source, key)),
@@ -599,10 +639,111 @@ fn summarize_violations(violations: &[validate::Violation]) -> String {
 mod tests {
     use crate::{
         command::{ColonCommand, Mode},
-        keymap::{BindingTarget, Lookup, default_keymap},
+        keymap::{BindingScope, BindingTarget, Lookup, default_keymap},
     };
 
     use super::*;
+
+    /// The smallest standalone keymap the editor accepts: a way to the
+    /// command palette and a way back to Normal mode.
+    const WAY_OUT: &str = "defaults: false\nbind:\n  normal:\n    ':': open-command-palette\n  select:\n    Esc: enter-normal-mode\n  insert:\n    Esc: enter-normal-mode\n  replace:\n    Esc: enter-normal-mode\n";
+
+    fn exact(compiled: &CompiledKeymap, mode: Mode, keys: &str) -> Option<BindingTarget> {
+        match compiled
+            .keymap
+            .lookup(mode, &KeySequence::parse(keys).unwrap())
+        {
+            Lookup::Exact(binding) | Lookup::ExactAndPrefix { exact: binding, .. } => {
+                Some(binding.target)
+            }
+            Lookup::NoMatch | Lookup::Prefix(_) => None,
+        }
+    }
+
+    #[test]
+    fn without_defaults_only_the_configured_global_keys_remain() {
+        let mut value: Value = serde_yaml::from_str(WAY_OUT).unwrap();
+        value["bind"]["normal"]["h"] = Value::String("move-down".into());
+        let compiled = compile(&value, default_keymap());
+        assert!(compiled.errors.is_empty(), "{:?}", compiled.errors);
+
+        assert_eq!(
+            exact(&compiled, Mode::Normal, "h"),
+            Some(BindingTarget::Editor(
+                crate::command::EditorCommand::MoveDown
+            ))
+        );
+        assert_eq!(exact(&compiled, Mode::Normal, "w"), None);
+        assert_eq!(exact(&compiled, Mode::Insert, "Ctrl-w"), None);
+        assert!(matches!(
+            compiled
+                .keymap
+                .lookup(Mode::Normal, &KeySequence::parse("Space").unwrap()),
+            Lookup::NoMatch
+        ));
+        // What `bind` could never supply is still there: the reserved
+        // context-action key and every scoped binding of a special buffer.
+        assert_eq!(
+            exact(&compiled, Mode::Normal, "Tab"),
+            Some(BindingTarget::Editor(
+                crate::command::EditorCommand::CodeAction
+            ))
+        );
+        for binding in default_keymap()
+            .bindings()
+            .iter()
+            .filter(|binding| binding.scope != BindingScope::Global)
+        {
+            assert!(
+                compiled.keymap.bindings().contains(binding),
+                "{:?} {} lost",
+                binding.scope,
+                binding.sequence
+            );
+        }
+    }
+
+    #[test]
+    fn without_defaults_a_keymap_that_cannot_be_left_keeps_the_defaults() {
+        let value: Value =
+            serde_yaml::from_str("defaults: false\nbind:\n  normal:\n    x: move-left\n").unwrap();
+        let compiled = compile(&value, default_keymap());
+
+        assert_eq!(
+            compiled.errors,
+            [
+                "defaults: false rejected: bind has no open-command-palette in normal, enter-normal-mode in select, enter-normal-mode in insert, enter-normal-mode in replace; the built-in bindings were kept"
+            ]
+        );
+        assert_eq!(
+            exact(&compiled, Mode::Normal, "x"),
+            Some(BindingTarget::Editor(
+                crate::command::EditorCommand::MoveLeft
+            ))
+        );
+        assert!(exact(&compiled, Mode::Normal, "w").is_some());
+    }
+
+    #[test]
+    fn without_defaults_rebind_is_ignored_and_defaults_must_be_a_boolean() {
+        let value: Value =
+            serde_yaml::from_str(&format!("{WAY_OUT}rebind:\n  Space g: Leader G\n")).unwrap();
+        let compiled = compile(&value, default_keymap());
+        assert_eq!(
+            compiled.errors,
+            [
+                "rebind \"Space g\" ignored: keys.defaults is false, so there is no built-in binding to move"
+            ]
+        );
+
+        let value: Value = serde_yaml::from_str("defaults: maybe\n").unwrap();
+        let compiled = compile(&value, default_keymap());
+        assert_eq!(
+            compiled.errors,
+            ["keys section rejected: defaults must be true or false"]
+        );
+        assert!(exact(&compiled, Mode::Normal, "w").is_some());
+    }
 
     #[test]
     fn terminal_copy_admission_follows_the_effective_registry() {
