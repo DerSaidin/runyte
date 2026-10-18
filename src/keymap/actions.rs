@@ -8,7 +8,7 @@ use super::{
 use crate::command::{self, CommandId, CommandInvocation, EditorCommand, Mode};
 use crate::input::KeyCode;
 use serde_yaml::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const MAX_BINDINGS: usize = 256;
 const MAX_ACTIONS: usize = 16;
@@ -369,51 +369,71 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
             }
         }
     }
+    // Insert and Replace keys a terminal already answers to in the built-in
+    // map; anything else replaced in those modes keeps its built-in meaning
+    // inside terminals.
+    let terminal_keys = base
+        .bindings
+        .iter()
+        .filter(|binding| binding.scope == BindingScope::Terminal)
+        .flat_map(|binding| {
+            binding
+                .modes
+                .iter()
+                .map(move |&mode| (mode, binding.sequence.clone()))
+        })
+        .collect::<HashSet<_>>();
     let mut active = vec![true; rules.len()];
     loop {
         let mut candidate = base.clone();
-        for (rule, enabled) in rules.iter().zip(&active) {
-            if !enabled {
-                continue;
-            }
-            candidate.bindings = candidate
-                .bindings
-                .into_iter()
-                .flat_map(|binding| {
-                    if binding.scope == BindingScope::Global
-                        && binding.sequence == rule.sequence
-                        && binding.is_active_in(rule.mode)
+        // One pass over the bindings for all rules: a written configuration
+        // carries the whole built-in keymap, and a pass per rule would cost
+        // their product at every startup.
+        let mut replaced = HashMap::<&KeySequence, Vec<Mode>>::new();
+        for (rule, _) in rules.iter().zip(&active).filter(|(_, enabled)| **enabled) {
+            replaced.entry(&rule.sequence).or_default().push(rule.mode);
+        }
+        candidate.bindings = candidate
+            .bindings
+            .into_iter()
+            .flat_map(|binding| {
+                let modes = match replaced.get(&binding.sequence) {
+                    Some(modes) if binding.scope == BindingScope::Global => modes
+                        .iter()
+                        .copied()
+                        .filter(|&mode| binding.is_active_in(mode))
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                if modes.is_empty() {
+                    return vec![binding];
+                }
+                let mut retained = binding
+                    .modes
+                    .iter()
+                    .filter(|mode| !modes.contains(mode))
+                    .map(|&mode| {
+                        let mut copy = binding.clone();
+                        copy.modes = mode_slice(mode);
+                        copy
+                    })
+                    .collect::<Vec<_>>();
+                for mode in modes {
+                    if matches!(mode, Mode::Insert | Mode::Replace)
+                        && !terminal_keys.contains(&(mode, binding.sequence.clone()))
                     {
-                        let mut retained = binding
-                            .modes
-                            .iter()
-                            .filter(|&&mode| mode != rule.mode)
-                            .map(|&mode| {
-                                let mut copy = binding.clone();
-                                copy.modes = mode_slice(mode);
-                                copy
-                            })
-                            .collect::<Vec<_>>();
-                        if matches!(rule.mode, Mode::Insert | Mode::Replace)
-                            && !base.bindings.iter().any(|original| {
-                                original.scope == BindingScope::Terminal
-                                    && original.is_active_in(rule.mode)
-                                    && original.sequence == rule.sequence
-                            })
-                        {
-                            let mut terminal = binding.clone();
-                            terminal.scope = BindingScope::Terminal;
-                            terminal.modes = mode_slice(rule.mode);
-                            terminal.alias = None;
-                            terminal.alias_modes = None;
-                            retained.push(terminal);
-                        }
-                        retained
-                    } else {
-                        vec![binding]
+                        let mut terminal = binding.clone();
+                        terminal.scope = BindingScope::Terminal;
+                        terminal.modes = mode_slice(mode);
+                        terminal.alias = None;
+                        terminal.alias_modes = None;
+                        retained.push(terminal);
                     }
-                })
-                .collect();
+                }
+                retained
+            })
+            .collect();
+        for (rule, _) in rules.iter().zip(&active).filter(|(_, enabled)| **enabled) {
             if let Some(first) = rule.actions.first() {
                 let mut binding = Binding::implemented(
                     mode_slice(rule.mode),
