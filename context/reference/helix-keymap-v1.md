@@ -6,6 +6,8 @@ advertised aliases without changing the compatibility status recorded here.
 `keys.bind` additionally overrides or removes exact global bindings by mode,
 using semantic action names or bounded action sequences after remapping. These
 custom assignments do not change the default-key compatibility rows below.
+`keys.defaults: false` leaves out every default global binding `keys.bind`
+could assign, so those rows describe nothing until `bind` assigns them again.
 `:help key-actions` is generated from the configurable action inventory.
 
 Target: [Helix master keymap](https://docs.helix-editor.com/master/keymap.html),

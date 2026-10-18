@@ -6707,8 +6707,8 @@ language server, including the built-in ones. Themes and keys go into
 | File | What it holds |
 | --- | --- |
 | `themes.d/<name>.yaml` | Each theme that is not exactly a built-in one. Built-in themes are not written. |
-| `keybinds.d/00-prefixes.yaml` | `leader`, `window`, and `rebind`, when any are set. |
-| `keybinds.d/normal.yaml`, `select.yaml`, `insert.yaml`, `replace.yaml` | Every key that does something in that mode, under `bind`: the built-in keys and your own, so each can be changed in place. |
+| `keybinds.d/00-prefixes.yaml` | `leader`, `window`, `rebind`, and `defaults`, when any are set. |
+| `keybinds.d/normal.yaml`, `select.yaml`, `insert.yaml`, `replace.yaml` | Every key that does something in that mode, under `bind`: the built-in keys and your own, so each can be changed in place. With `keys.defaults: false`, only your own. |
 
 A theme whose name is not a portable file name, or differs from another only
 in letter case, stays inline under `themes:`. The built-in keys left out of
@@ -7137,7 +7137,7 @@ choice by accident.
 
 ## Custom key bindings
 
-The `keys` section changes the keyboard. It has four parts:
+The `keys` section changes the keyboard. It has five parts:
 
 | Key | What it does |
 | --- | --- |
@@ -7145,6 +7145,7 @@ The `keys` section changes the keyboard. It has four parts:
 | `keys.window` | Replaces `Ctrl-w` as the window prefix. |
 | `keys.rebind` | Moves bindings Runyte already ships to other keys. |
 | `keys.bind` | Assigns named actions to keys, per mode. Also removes bindings. |
+| `keys.defaults` | `false` starts `bind` from an empty keyboard instead of Runyte's. See [Without the built-in keys](#without-the-built-in-keys). |
 
 - `keys` is read from the configuration file and from
   [`keybinds.d/`](#themes-and-key-bindings-in-their-own-files) beside it; the
@@ -7381,6 +7382,48 @@ keys:
     normal:
       F2: { command: help, argument: key-actions }
 ```
+
+### Without the built-in keys
+
+Everything above changes Runyte's own keyboard: keys you do not mention keep
+their built-in meaning. Set `keys.defaults: false` to start from an empty one
+instead, so the only keys that do anything are the ones `bind` assigns:
+
+```yaml
+keys:
+  defaults: false
+  bind:
+    normal:
+      ":": open-command-palette
+      i: enter-insert-mode
+      h: move-left
+      l: move-right
+    select:
+      Esc: enter-normal-mode
+    insert:
+      Esc: enter-normal-mode
+    replace:
+      Esc: enter-normal-mode
+```
+
+- **What goes:** every built-in key in Normal, Select, Insert, and Replace
+  modes that `bind` could assign, including the whole leader and window
+  menus.
+- **What stays:** keys that are not yours to assign. Special buffers such as
+  the explorer, Git views, and help keep their own keys; so do lists, prompts,
+  and terminals. `Tab`, which runs a code action, and the count digits stay
+  too, because `bind` cannot use them.
+- **`rebind` is ignored**, with a message for each entry, since there is no
+  built-in binding left to move. `leader` and `window` still set what `Leader`
+  and `Window` mean in `bind`.
+- **A way out is required.** The `bind` section must reach
+  `open-command-palette` in Normal mode and `enter-normal-mode` in Select,
+  Insert, and Replace modes. Without them you could not leave a mode or reach
+  the configuration to fix it, so Runyte reports what is missing and keeps
+  the built-in keys underneath your `bind` instead.
+
+`:write-config` keeps `defaults: false` and writes only your own keys, since
+there are no built-in ones to spell out.
 
 ### How bindings are resolved
 
