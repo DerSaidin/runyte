@@ -1047,13 +1047,23 @@ fn newline_indentation_retains_ancestor_captures_in_later_injections() {
         ),
     ] {
         let (registry, text, syntax) = parse(&source, language);
-        for (marker, levels) in [("second() {\n", 1), ("(ready) {\n", 2), ("go();\n", 2)] {
+        for (marker, levels, opening) in [
+            ("second() {\n", 1, 1),
+            ("(ready) {\n", 2, 1),
+            ("go();\n", 2, 0),
+        ] {
             let newline = char_offset(&source, marker) + marker.chars().count() - 1;
             let indent = syntax.newline_indent(&text, &registry, newline).unwrap();
             assert_eq!(registry.language_name(indent.language), "javascript");
             assert_eq!(indent.injection_depth, depth);
             assert_eq!(
                 indent.always_levels, levels,
+                "{language} {marker}: {indent:?}"
+            );
+            // Only the blocks that begin on the row open a level beyond the
+            // row's own indentation; enclosing blocks are already in it.
+            assert_eq!(
+                indent.opening_levels, opening,
                 "{language} {marker}: {indent:?}"
             );
             assert_eq!((indent.begin_levels, indent.tab_levels), (0, 0));

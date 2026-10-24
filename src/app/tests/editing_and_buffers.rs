@@ -2869,6 +2869,106 @@ fn smart_newline_preserves_crlf_and_uses_its_syntax_indent() {
 }
 
 #[test]
+fn syntax_newline_inside_a_block_keeps_the_rows_own_indentation() {
+    // Enter on an ordinary row adds nothing: the row's leading whitespace
+    // already carries every enclosing level. Counting the enclosing block
+    // again stepped one level deeper on every press.
+    for (name, original, row) in [
+        ("inside-block.yaml", "root:\n  a: 1\n  b: 2\n", 1),
+        ("inside-block.yaml", "a: 1\nb: 2\n", 0),
+        (
+            "inside-block.jsonc",
+            "{\n  // note\n  \"a\": 1,\n  \"b\": 2\n}\n",
+            2,
+        ),
+        (
+            "inside-block.rs",
+            "fn f() {\n    let a = 1;\n    let b = 2;\n}\n",
+            1,
+        ),
+        ("inside-block.py", "def f():\n    a = 1\n    b = 2\n", 1),
+        ("inside-block.mk", "all:\n\t@echo ok\n\t@echo done\n", 1),
+    ] {
+        let path = temporary(name);
+        fs::write(&path, original).unwrap();
+        let mut app = App::new(smart_newline_config(), Some(path.clone())).unwrap();
+        app.mode = Mode::Insert;
+        let caret = app.buffers[0].line_to_offset(row) + app.buffers[0].line_len(row);
+        app.replace_active_selection(Selection::point(caret));
+
+        app.edit_newline();
+
+        let line = app.buffers[0].line_string(row);
+        let indent: String = line
+            .chars()
+            .take_while(|character| matches!(character, ' ' | '\t'))
+            .collect();
+        assert_eq!(
+            app.buffers[0].line_string(row + 1),
+            indent,
+            "{name}: {original:?}"
+        );
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn syntax_newline_adds_one_level_below_a_row_that_opens_a_block() {
+    // `row_indent` is the opening row's own indentation; one default
+    // four-space level goes on top of it.
+    for (name, original, row, row_indent) in [
+        ("opens-block.yaml", "root:\n  a: 1\n", 0, ""),
+        ("opens-block.yaml", "a: |\n  text\n", 0, ""),
+        (
+            "opens-block.json",
+            "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n",
+            1,
+            "  ",
+        ),
+        (
+            "opens-block.py",
+            "def f():\n    if x:\n        a()\n    elif y:\n        b()\n    else:\n        c()\n",
+            3,
+            "    ",
+        ),
+        (
+            "opens-block.py",
+            "def f():\n    try:\n        a()\n    except E:\n        b()\n    finally:\n        c()\n",
+            5,
+            "    ",
+        ),
+        (
+            "opens-block.sh",
+            "if a; then\n    b\nelse\n    c\nfi\n",
+            2,
+            "",
+        ),
+        (
+            "opens-block.lua",
+            "if a then\n    b()\nelseif c then\n    d()\nend\n",
+            2,
+            "",
+        ),
+    ] {
+        let path = temporary(name);
+        fs::write(&path, original).unwrap();
+        let mut app = App::new(smart_newline_config(), Some(path.clone())).unwrap();
+        app.mode = Mode::Insert;
+        let caret = app.buffers[0].line_to_offset(row) + app.buffers[0].line_len(row);
+        app.replace_active_selection(Selection::point(caret));
+
+        app.edit_newline();
+
+        assert_eq!(
+            app.buffers[0].line_string(row + 1),
+            format!("{row_indent}    "),
+            "{name}: {original:?}"
+        );
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
 fn smart_newline_uses_the_required_make_recipe_tab() {
     let path = temporary("syntax-indent.mk");
     let original = "all:\n";
@@ -2937,7 +3037,9 @@ fn syntax_newline_multiline_selection_uses_normalized_insertion_row_in_both_dire
     app.replace_active_selection(Selection::single(Range::new(to, from)));
     app.edit_newline();
     assert_eq!(text(&app), forward);
-    assert_eq!(forward, "fn outer() {\n    \n        two();\n}\n");
+    // Row 1 is the insertion row: its four spaces, not row 2's eight, and no
+    // extra level because nothing opens on it.
+    assert_eq!(forward, "fn outer() {\n    \n    two();\n}\n");
     fs::remove_file(path).unwrap();
 }
 

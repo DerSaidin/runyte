@@ -472,6 +472,11 @@ pub struct Outline {
 /// Keeping these minimal query semantics distinct lets an editing frontend
 /// combine them with its whitespace policy without exposing Tree-sitter
 /// captures.
+///
+/// `opening_levels` and `opening_tab_levels` count only the containers of
+/// either kind, and the tab contexts, that begin on the newline's row. A
+/// frontend that starts from the row's own leading whitespace already carries
+/// every enclosing level, so these are the levels it may add on top.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewlineIndent {
     pub newline: SyntaxRange,
@@ -481,6 +486,8 @@ pub struct NewlineIndent {
     pub begin_levels: u16,
     pub always_levels: u16,
     pub tab_levels: u16,
+    pub opening_levels: u16,
+    pub opening_tab_levels: u16,
     pub issues: Vec<IndentIssue>,
     pub truncated: bool,
     document: u64,
@@ -2335,6 +2342,14 @@ impl DocumentSyntax {
             let mut begin_levels = 0usize;
             let mut always_levels = 0usize;
             let mut tab_levels = 0usize;
+            // A node captured as both `begin` and `always` still opens one
+            // level, so openings are deduplicated by node alone.
+            let mut opening = std::collections::HashSet::new();
+            let mut opening_tab = std::collections::HashSet::new();
+            let starts_on_newline_row = |node: &Node| {
+                checked_byte_to_char(text, node.start_byte() as usize)
+                    .map(|offset| text.position_of(offset).row == newline_row)
+            };
             let mut current_depth = 0usize;
             while let Some(event) = iter.next() {
                 let captured_match = match event {
@@ -2356,15 +2371,13 @@ impl DocumentSyntax {
                 if let Some(capture) = begin {
                     for node in captured_match.nodes_for_capture(capture) {
                         let key = (0u8, node.start_byte(), node.end_byte());
-                        let starts_on_newline_row =
-                            checked_byte_to_char(text, node.start_byte() as usize)
-                                .map(|offset| text.position_of(offset).row == newline_row)?;
                         if node.start_byte() <= newline_byte
                             && node.end_byte() > newline_byte
-                            && starts_on_newline_row
+                            && starts_on_newline_row(node)?
                             && seen.insert(key)
                         {
                             begin_levels += 1;
+                            opening.insert((node.start_byte(), node.end_byte()));
                         }
                     }
                 }
@@ -2376,6 +2389,9 @@ impl DocumentSyntax {
                             && seen.insert(key)
                         {
                             always_levels += 1;
+                            if starts_on_newline_row(node)? {
+                                opening.insert((node.start_byte(), node.end_byte()));
+                            }
                         }
                     }
                 }
@@ -2387,6 +2403,9 @@ impl DocumentSyntax {
                             && seen.insert(key)
                         {
                             tab_levels += 1;
+                            if starts_on_newline_row(node)? {
+                                opening_tab.insert((node.start_byte(), node.end_byte()));
+                            }
                         }
                     }
                 }
@@ -2395,6 +2414,8 @@ impl DocumentSyntax {
             if begin_levels > INDENT_LEVEL_LIMIT
                 || always_levels > INDENT_LEVEL_LIMIT
                 || tab_levels > INDENT_LEVEL_LIMIT
+                || opening.len() > INDENT_LEVEL_LIMIT
+                || opening_tab.len() > INDENT_LEVEL_LIMIT
             {
                 truncated = true;
             }
@@ -2406,6 +2427,8 @@ impl DocumentSyntax {
                 begin_levels: begin_levels.min(INDENT_LEVEL_LIMIT) as u16,
                 always_levels: always_levels.min(INDENT_LEVEL_LIMIT) as u16,
                 tab_levels: tab_levels.min(INDENT_LEVEL_LIMIT) as u16,
+                opening_levels: opening.len().min(INDENT_LEVEL_LIMIT) as u16,
+                opening_tab_levels: opening_tab.len().min(INDENT_LEVEL_LIMIT) as u16,
                 issues,
                 truncated,
                 document: self.document,

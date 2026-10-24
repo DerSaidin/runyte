@@ -9,5 +9,7 @@
   (while_statement)
   (table_constructor)
   (do_statement)
+  (elseif_statement)
+  (else_statement)
 ] @indent.always
 (arguments) @indent.begin

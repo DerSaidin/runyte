@@ -1482,10 +1482,12 @@ impl App {
                                 .newline_indent(buffer.text(), &self.registry, newline_offset)
                                 .ok()
                         })
+                        // `prefix` already carries every enclosing level, so
+                        // only a container opening on this row adds one.
                         .map_or("", |indent| {
-                            if indent.tab_levels > 0 {
+                            if indent.opening_tab_levels > 0 {
                                 "\t"
-                            } else if indent.begin_levels + indent.always_levels > 0 {
+                            } else if indent.opening_levels > 0 {
                                 unit.as_str()
                             } else {
                                 ""
