@@ -108,6 +108,7 @@ impl App {
     pub(super) fn with_selection_action<T>(&mut self, action: impl FnOnce(&mut Self) -> T) -> T {
         let outer = self.selection_action_depth == 0;
         if outer {
+            self.check_append_insert();
             self.finish_selection_drag();
             // Do not clone an oversized selection, or retain a history with
             // an unrecordable gap. Terminal visits leave buffer history alone.
@@ -124,6 +125,7 @@ impl App {
         let result = action(self);
         self.selection_action_depth -= 1;
         if outer {
+            self.follow_append_insert();
             if self.mode == Mode::Command {
                 // A prompt is part of the operation it collects, not a
                 // sequence of selection changes. Retain one bounded origin.

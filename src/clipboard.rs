@@ -3,6 +3,15 @@
 //! Platform clipboard boundary: native UTF-16 on Windows, bounded helpers on Unix.
 
 use anyhow::Result;
+
+pub(crate) fn live_clipboard(
+    window: Option<&'static dyn crate::cli::window::WindowFrontend>,
+) -> Box<dyn SystemClipboard> {
+    window
+        .and_then(|window| window.system_clipboard())
+        .unwrap_or_else(|| Box::new(CommandClipboard))
+}
+
 #[cfg(not(windows))]
 mod helpers;
 #[cfg(windows)]
@@ -10,7 +19,8 @@ mod windows;
 #[cfg(not(windows))]
 use helpers::*;
 
-const MAX_CLIPBOARD_TEXT_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum text or encoded image size accepted by clipboard backends.
+pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Testable clipboard boundary used by the editor.
 pub trait SystemClipboard: Send {

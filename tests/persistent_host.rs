@@ -2802,3 +2802,114 @@ tr 'a-z' 'A-Z'
 mod plugin_examples;
 #[path = "persistent_host/plugin_stable.rs"]
 mod plugin_stable;
+
+#[tokio::test]
+async fn terminal_edition_host_accepts_preview_from_a_window_attachment() {
+    let sandbox = TestSandbox::new();
+    let root = project();
+    let child = sandbox
+        .bundled_runyte()
+        .args(["--serve", "note.txt"])
+        .current_dir(&root)
+        .env("XDG_RUNTIME_DIR", sandbox.runtime_dir())
+        .env("XDG_CACHE_HOME", sandbox.cache_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child = ChildGuard(Some(child));
+    let endpoint = LocalEndpoint::discover_with_runtime(
+        &root.join(".runyte"),
+        &root,
+        Some(sandbox.runtime_dir()),
+    )
+    .unwrap();
+    assert!(wait_for_endpoint(&mut child, &endpoint).await);
+    let mut window = LocalClient::connect_with_media(&endpoint, geometry(), true, false, true)
+        .await
+        .unwrap();
+    assert!(matches!(
+        response(&mut window).await,
+        HostResponse::Welcome { .. }
+    ));
+    let initial = next_complete_frame(&mut window).await;
+    assert!(matches!(
+        invoke_when_current(&mut window, "preview", initial).await,
+        HostResponse::CommandResult { .. }
+    ));
+    window.send(&ClientRequest::Resynchronize).await.unwrap();
+    let first = response(&mut window).await;
+    let frame = wait_for_editor_frame(
+        &mut window,
+        first,
+        "window preview served by a terminal-edition host",
+        |frame| {
+            frame.editor.panes.iter().any(|pane| {
+                pane.preview.as_ref().is_some_and(|preview| {
+                    runyte::document_preview::DocumentPreview::try_from(preview.clone())
+                        .unwrap()
+                        .text
+                        == "base\n"
+                })
+            })
+        },
+    )
+    .await;
+    assert!(frame.editor.panes.iter().any(|pane| pane.preview.is_some()));
+    // The correlation response must reflect earlier inputs, including an
+    // ignored key, rather than an unrelated queued visual frame.
+    for (serial, code, expected) in [
+        (1, KeyCode::Char(':'), runyte::command::Mode::Command),
+        (2, KeyCode::Escape, runyte::command::Mode::Normal),
+        (3, KeyCode::Function(24), runyte::command::Mode::Normal),
+    ] {
+        window
+            .send(&ClientRequest::Input {
+                event: InputEvent::Key(KeyStroke::plain(code)).into(),
+                repeated: false,
+                presented_frame: Some(frame.id),
+            })
+            .await
+            .unwrap();
+        window
+            .send(&ClientRequest::InputBarrier { serial })
+            .await
+            .unwrap();
+        let mut acknowledged = false;
+        for _ in 0..16 {
+            if let HostResponse::InputBarrier {
+                serial: received,
+                frame: after,
+            } = response(&mut window).await
+            {
+                assert_eq!(received, serial);
+                let mode: runyte::command::Mode = after.editor.mode.into();
+                assert_eq!(mode, expected);
+                assert!(after.id > frame.id);
+                acknowledged = true;
+                break;
+            }
+        }
+        assert!(acknowledged, "input barrier did not complete");
+    }
+    detach(&mut window, "window preview captured").await;
+    let (mut terminal, _) = connect_interactive_when_available(&endpoint, geometry()).await;
+    let initial = next_complete_frame(&mut terminal).await;
+    let outcome = invoke_when_current(&mut terminal, "preview", initial).await;
+    assert!(
+        matches!(outcome, HostResponse::CommandResult {
+        outcome: runyte::protocol::CommandOutcome::UserError(ref message)
+    } if message == ":preview needs the Runyte window: use the desktop edition with --window"),
+        "{outcome:?}"
+    );
+    shutdown(&mut terminal, ClientRequest::Shutdown).await;
+    assert!(
+        tokio::task::spawn_blocking(move || child.0.take().unwrap().wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    fs::remove_dir_all(root).unwrap();
+}

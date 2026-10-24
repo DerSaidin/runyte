@@ -16,6 +16,7 @@ use crate::{
 
 pub mod actions;
 pub mod configured;
+pub mod native_window;
 pub mod validate;
 
 /// Compatibility name for a keymap key while callers migrate to the owned
@@ -233,6 +234,10 @@ pub enum BindingScope {
     Plugin(usize),
     #[default]
     Global,
+    /// A native image/PDF surface owns its pixel selection and view controls.
+    Media,
+    /// Read-only PDF page rows with ordinary text navigation.
+    PdfPages,
     Directory,
     DirectoryTree,
     Settings,
@@ -278,6 +283,8 @@ impl BindingScope {
     /// Exhaustive scope inventory used by registry invariants.
     pub const ALL: &'static [Self] = &[
         Self::Global,
+        Self::Media,
+        Self::PdfPages,
         Self::Directory,
         Self::DirectoryTree,
         Self::Settings,
@@ -312,7 +319,7 @@ impl BindingScope {
         )
     }
     pub(crate) const fn owns_modal_input(self) -> bool {
-        self.is_merge_review() || matches!(self, Self::DirectoryTree)
+        self.is_merge_review() || matches!(self, Self::DirectoryTree | Self::Media | Self::PdfPages)
     }
 
     /// Whether the scope belongs to a generated view rather than to a document
@@ -1185,6 +1192,28 @@ impl Keymap {
         self.lookup_in(mode, BindingScope::Global, sequence)
     }
 
+    /// Clipboard copy bindings visible in Terminal Insert, including
+    /// configured replacements. Ordinary Ctrl-c remains child input.
+    pub fn terminal_clipboard_key(&self, key: Key) -> bool {
+        let copy = |binding: &Binding| {
+            binding.actions.is_empty()
+                && binding.target == BindingTarget::Editor(EditorCommand::ClipboardYank)
+        };
+        match self.lookup_in(
+            Mode::Insert,
+            BindingScope::Terminal,
+            &KeySequence::from(key),
+        ) {
+            Lookup::Exact(binding) => copy(binding),
+            Lookup::Prefix(bindings) => bindings.iter().any(|binding| copy(binding)),
+            Lookup::ExactAndPrefix {
+                exact,
+                continuations,
+            } => copy(exact) || continuations.iter().any(|binding| copy(binding)),
+            Lookup::NoMatch => false,
+        }
+    }
+
     pub fn lookup_in(&self, mode: Mode, scope: BindingScope, sequence: &KeySequence) -> Lookup<'_> {
         // Scopes without bindings in this mode inherit the global index.
         let Some(entry) = self
@@ -1464,6 +1493,18 @@ fn built_in_bindings() -> Vec<Binding> {
         // versions send no input for an image-only clipboard; Alt-v provides
         // a key that can reach Runyte there. Both work in editor modes;
         // Terminal Insert remains untouched so the child owns these keys.
+        modal(Key::ctrl('C'), Command::ClipboardYank),
+        insert(Key::ctrl('C'), Command::ClipboardYank),
+        #[cfg(target_os = "macos")]
+        modal(
+            Key::new(KeyCode::Char('c'), Modifiers::SUPER),
+            Command::ClipboardYank,
+        ),
+        #[cfg(target_os = "macos")]
+        insert(
+            Key::new(KeyCode::Char('c'), Modifiers::SUPER),
+            Command::ClipboardYank,
+        ),
         modal(Key::ctrl('v'), Command::ClipboardPaste),
         insert(Key::ctrl('v'), Command::ClipboardPaste),
         modal(Key::alt('v'), Command::ClipboardPaste),
@@ -1497,11 +1538,6 @@ fn built_in_bindings() -> Vec<Binding> {
         modal(Key::char('H'), Command::GotoWindowTop),
         modal(Key::char('M'), Command::GotoWindowCenter),
         modal(Key::char('L'), Command::GotoWindowBottom),
-        modal([Key::char('g'), Key::char('p')], Command::GotoNextParagraph),
-        modal(
-            [Key::char('g'), Key::char('P')],
-            Command::GotoPreviousParagraph,
-        ),
         modal([Key::char('g'), Key::char('f')], Command::GotoFile),
         modal([Key::char('g'), Key::char('w')], Command::GotoWord),
         modal([Key::char('g'), Key::char('d')], Command::GotoDefinition),
@@ -1988,6 +2024,10 @@ fn built_in_bindings() -> Vec<Binding> {
         modal([Key::ctrl('w'), Key::char('w')], Command::NextWindow),
         modal([Key::ctrl('w'), Key::ctrl('w')], Command::NextWindow),
         modal([Key::ctrl('w'), Key::char('x')], Command::SwapWindow),
+        modal([Key::ctrl('w'), Key::char('H')], Command::MoveWindowLeft),
+        modal([Key::ctrl('w'), Key::char('J')], Command::MoveWindowDown),
+        modal([Key::ctrl('w'), Key::char('K')], Command::MoveWindowUp),
+        modal([Key::ctrl('w'), Key::char('L')], Command::MoveWindowRight),
         modal([Key::ctrl('w'), Key::char('v')], Command::SplitVertical),
         modal([Key::ctrl('w'), Key::ctrl('v')], Command::SplitVertical),
         modal([Key::ctrl('w'), Key::char('s')], Command::SplitHorizontal),
@@ -2009,6 +2049,10 @@ fn built_in_bindings() -> Vec<Binding> {
         insert([Key::ctrl('w'), Key::char('w')], Command::NextWindow),
         insert([Key::ctrl('w'), Key::ctrl('w')], Command::NextWindow),
         insert([Key::ctrl('w'), Key::char('x')], Command::SwapWindow),
+        insert([Key::ctrl('w'), Key::char('H')], Command::MoveWindowLeft),
+        insert([Key::ctrl('w'), Key::char('J')], Command::MoveWindowDown),
+        insert([Key::ctrl('w'), Key::char('K')], Command::MoveWindowUp),
+        insert([Key::ctrl('w'), Key::char('L')], Command::MoveWindowRight),
         insert([Key::ctrl('w'), Key::char('h')], Command::FocusWindowLeft),
         insert([Key::ctrl('w'), Key::ctrl('h')], Command::FocusWindowLeft),
         insert([Key::ctrl('w'), Key::char('j')], Command::FocusWindowDown),
@@ -2077,6 +2121,24 @@ fn built_in_bindings() -> Vec<Binding> {
             [Key::char(' '), Key::char('w'), Key::char('l')],
             Command::FocusWindowRight,
         ),
+        // Vim's `Ctrl-w H/J/K/L`: the shifted focus key carries the pane to
+        // that whole side of the layout rather than just looking there.
+        modal(
+            [Key::char(' '), Key::char('w'), Key::char('H')],
+            Command::MoveWindowLeft,
+        ),
+        modal(
+            [Key::char(' '), Key::char('w'), Key::char('J')],
+            Command::MoveWindowDown,
+        ),
+        modal(
+            [Key::char(' '), Key::char('w'), Key::char('K')],
+            Command::MoveWindowUp,
+        ),
+        modal(
+            [Key::char(' '), Key::char('w'), Key::char('L')],
+            Command::MoveWindowRight,
+        ),
         modal(Key::char('"'), Command::SelectRegister),
         // Macros live in one namespace rather than on `Q` and `q`, which say
         // nothing about what they do. `Space m m` both starts and stops the
@@ -2102,8 +2164,142 @@ fn built_in_bindings() -> Vec<Binding> {
             [Key::char(' '), Key::char('m'), Key::char('l')],
             Command::ListMacros,
         ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::PdfPages,
+            Key::plain(KeyCode::Escape),
+            Command::MediaBack,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::PdfPages,
+            Key::char('q'),
+            Command::MediaBack,
+        ),
         // Enter alone opens an entry. A directory buffer is an ordinary buffer,
         // so `e` has to stay the word-end motion here as it is everywhere else.
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::PdfPages,
+            Key::plain(KeyCode::Enter),
+            Command::MediaShowPage,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('+'),
+            Command::MediaZoomIn,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('j'),
+            Command::MediaMoveDown,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::plain(KeyCode::Down),
+            Command::MediaMoveDown,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('k'),
+            Command::MediaMoveUp,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::plain(KeyCode::Up),
+            Command::MediaMoveUp,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::ctrl('n'),
+            Command::PageDown,
+        ),
+        Binding::implemented_in(MODAL, BindingScope::Media, Key::ctrl('p'), Command::PageUp),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('='),
+            Command::MediaZoomIn,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('-'),
+            Command::MediaZoomOut,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            [Key::char('z'), Key::char('f')],
+            Command::MediaFit,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            [Key::char('z'), Key::char('1')],
+            Command::MediaActualSize,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            [Key::char('z'), Key::char('h')],
+            Command::MediaPanLeft,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            [Key::char('z'), Key::char('l')],
+            Command::MediaPanRight,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('y'),
+            Command::MediaCopySelection,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::ctrl('C'),
+            Command::MediaCopySelection,
+        ),
+        #[cfg(target_os = "macos")]
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::new(KeyCode::Char('c'), Modifiers::SUPER),
+            Command::MediaCopySelection,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::ctrl('c'),
+            Command::MediaCopySelection,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::plain(KeyCode::Escape),
+            Command::MediaBack,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('q'),
+            Command::MediaBack,
+        ),
+        Binding::implemented_in(
+            MODAL,
+            BindingScope::Media,
+            Key::char('%'),
+            Command::MediaSelectAll,
+        ),
         directory(Key::plain(KeyCode::Enter), Command::OpenDirectoryEntry),
         directory(Key::plain(KeyCode::Backspace), Command::OpenParentDirectory),
         directory(Key::char('-'), Command::OpenParentDirectory),
@@ -3631,7 +3827,7 @@ mod tests {
             .filter(|scope| scope.is_special_buffer_scope())
             .count();
         assert_eq!(
-            special, 16,
+            special, 18,
             "special-buffer scope inventory changed; update the UI vocabulary"
         );
     }

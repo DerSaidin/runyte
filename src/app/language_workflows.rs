@@ -3424,6 +3424,42 @@ impl App {
                 .panes
                 .values()
                 .any(|pane| pane.destination() == super::OpenDestination::Buffer(buffer))
+            && !self.shown_as_markdown_page(buffer)
+    }
+
+    /// The live rendered pages of a document, which close with it.
+    fn markdown_pages_of(&self, source: usize) -> Vec<usize> {
+        self.buffers
+            .iter()
+            .enumerate()
+            .filter(|(page, buffer)| {
+                !self.closed_buffers.contains(page)
+                    && buffer.markdown_render_source() == Some(source)
+            })
+            .map(|(page, _)| page)
+            .collect()
+    }
+
+    /// Whether a pane is reading this document through its rendered page.
+    /// Closing the document would close that page, so it is not hidden.
+    fn shown_as_markdown_page(&self, source: usize) -> bool {
+        let pages = self.markdown_pages_of(source);
+        self.panes.values().any(|pane| {
+            pages
+                .iter()
+                .any(|page| pane.destination() == super::OpenDestination::Buffer(*page))
+        })
+    }
+
+    /// Whether a buffer is the rendered page of a document that is still
+    /// open. Such a page lives exactly as long as its document, so the
+    /// retention limit for detached special buffers neither counts nor
+    /// evicts it: evicting it would forget how a pane last showed the
+    /// document while the document is still there to be shown.
+    fn is_page_of_open_document(&self, buffer: usize) -> bool {
+        self.buffers[buffer]
+            .markdown_render_source()
+            .is_some_and(|source| !self.closed_buffers.contains(&source))
     }
 
     fn run_buffer_action(&mut self, buffer: usize, action: BufferAction) -> Result<()> {
@@ -3450,13 +3486,15 @@ impl App {
             BufferAction::Close => self.close_buffer(buffer),
             BufferAction::CloseHidden => {
                 self.buffer_action_menu = None;
-                let mut count = 0;
+                // Counted by what closed rather than what was asked to, since
+                // a document closes its pages with it.
+                let open = self.closed_buffers.len();
                 for id in 0..self.buffers.len() {
                     if self.can_close_hidden_buffer(id) {
                         self.retire_buffer(id, false);
-                        count += 1;
                     }
                 }
+                let count = self.closed_buffers.len() - open;
                 self.status(format!(
                     "closed {count} hidden buffers; unsaved buffers kept"
                 ));
@@ -3656,10 +3694,12 @@ impl App {
                     .get_mut(&pane_id)
                     .and_then(|pane| pane.buffer_history.pop());
                 match candidate {
+                    // The retiring document's pages close with it.
                     Some(candidate)
                         if candidate != buffer
                             && candidate < self.buffers.len()
-                            && !self.closed_buffers.contains(&candidate) =>
+                            && !self.closed_buffers.contains(&candidate)
+                            && self.buffers[candidate].markdown_render_source() != Some(buffer) =>
                     {
                         break candidate;
                     }
@@ -3668,7 +3708,10 @@ impl App {
                         let fallback = (1..self.buffers.len())
                             .map(|distance| (buffer + distance) % self.buffers.len())
                             .find(|candidate| {
-                                *candidate != buffer && !self.closed_buffers.contains(candidate)
+                                *candidate != buffer
+                                    && !self.closed_buffers.contains(candidate)
+                                    && self.buffers[*candidate].markdown_render_source()
+                                        != Some(buffer)
                             })
                             .unwrap_or_else(|| {
                                 *scratch.get_or_insert_with(|| {
@@ -3728,6 +3771,9 @@ impl App {
             if refreshed {
                 self.normalize_buffer(fallback);
             }
+            // Falling back is arriving from history, so a page shows its
+            // document as it is now.
+            self.refresh_markdown_page(fallback);
             uncover.push(pane_id);
         }
         // A document an external request put over a terminal is done with the
@@ -3745,6 +3791,7 @@ impl App {
         self.markdown_positions.retain(|page, _| {
             *page != buffer && self.buffers[*page].markdown_render_source() != Some(buffer)
         });
+        self.markdown_rendered_from.remove(&buffer);
         self.closed_buffers.insert(buffer);
         self.forget_revision_comparison(buffer);
         for pane in self.panes.values_mut() {
@@ -3767,6 +3814,11 @@ impl App {
         // Keep the arena slot as a stable asynchronous identity, but drop the
         // text, path, directory projection, and undo/redo allocations it held.
         self.buffers[buffer] = Buffer::scratch();
+        // A rendered page is a reading of its document, so it closes with it
+        // rather than outliving it as a page `?` could no longer leave.
+        for page in self.markdown_pages_of(buffer) {
+            self.retire_buffer(page, false);
+        }
         if announce {
             self.status(format!("closed {name}"));
         }
@@ -3829,7 +3881,10 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter(|(index, buffer)| {
-                    !self.closed_buffers.contains(index) && buffer.is_special() && !buffer.dirty
+                    !self.closed_buffers.contains(index)
+                        && buffer.is_special()
+                        && !buffer.dirty
+                        && !self.is_page_of_open_document(*index)
                 })
                 .count();
             if clean_special_count <= SPECIAL_BUFFER_RETENTION_LIMIT {
@@ -3841,6 +3896,7 @@ impl App {
                     && !self.closed_buffers.contains(index)
                     && self.buffers[*index].is_special()
                     && !self.buffers[*index].dirty
+                    && !self.is_page_of_open_document(*index)
             });
             let Some(candidate) = candidate else {
                 break;
@@ -3876,6 +3932,7 @@ impl App {
                 }
                 (buffer.is_empty_clean_scratch()
                     && !visible.contains(&index)
+                    && !self.shown_as_markdown_page(index)
                     && (!referenced.contains(&index) || durable_fallback_exists))
                     .then_some(index)
             });
@@ -3977,7 +4034,7 @@ impl App {
                 unreachable!("permission choices are handled before closing the list")
             }
             Some(ListAction::Jump(location)) => self.jump_to(&location)?,
-            Some(ListAction::OpenPath(path)) => self.open_file(path)?,
+            Some(ListAction::OpenPath(path)) => self.open_document(path)?,
             Some(ListAction::OpenPathAtHeading(path, fragment)) => {
                 self.open_file_at_heading(path, &fragment)?;
             }

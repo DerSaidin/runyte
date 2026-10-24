@@ -188,20 +188,24 @@ mod directory_tree;
 mod editing;
 mod editing_and_buffers;
 mod editor_mode;
+mod emoji;
 mod external_dispatch;
 mod git;
 mod git_comparison;
 mod git_discovery;
 mod git_merge_lifecycle;
 mod git_merges;
+mod horizontal_view;
 mod indentation;
 mod jump_word_viewport;
 mod language;
 mod markdown_list_continuation;
+mod markdown_page_memory;
 mod markdown_positions;
 mod markdown_tables;
 mod mouse_autoscroll;
 mod navigation_and_files;
+mod pane_moves;
 mod paste_many_selections;
 mod plugin_activity_health;
 mod plugin_document_lifecycle;
@@ -415,3 +419,8 @@ mod pointer_scrolled_tabs;
 mod finder_disk_budget;
 
 mod pasted_completion;
+
+mod native_media;
+mod pointer_links;
+
+mod document_preview;

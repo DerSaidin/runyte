@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 
+[workspace]
+members = ["crates/runyte-native", "crates/runyte-desktop", "crates/runyte-preview"]
+
 [package]
 name = "runyte"
 version = "0.4.0"
@@ -28,6 +31,7 @@ include = [
     "/licenses/**",
     "/logo/ascii/logo.txt",
     "/README.md",
+    "/INSTALLATION.md",
     "/LICENSE",
     "/NOTICE",
     "/THIRD_PARTY_NOTICES.md",
@@ -70,7 +74,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = "0.9"
 shlex = "2.0"
-tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 trash = "5.2.6"
 url = "2.5"
 tree-house = { version = "=0.4.0", default-features = false }
@@ -151,3 +155,10 @@ harness = false
 name = "plugin_windows_worker"
 path = "tests/plugin_windows_worker.rs"
 harness = false
+
+# Desktop dependency compatibility corrections; provenance is in vendor/.
+[patch.crates-io]
+block = { path = "vendor/block" }
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }
+gpui = { path = "vendor/gpui" }
+stylo_derive = { path = "vendor/stylo_derive" }

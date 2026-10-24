@@ -29,7 +29,9 @@ impl Capture {
         {
             return Err(io::Error::last_os_error());
         }
-        let reader = AsyncFd::new(pipe)?;
+        // SAFETY: AsyncFd owns the pipe until deregistration. The drain task
+        // only reads it and never closes or replaces its descriptor.
+        let reader = unsafe { AsyncFd::register(pipe) }?;
         let (stop, receiver) = oneshot::channel();
         Ok(Self {
             stop: Some(stop),

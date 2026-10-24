@@ -840,7 +840,7 @@ fn document_outline_direct_colon_and_key_paths_share_identity_and_jump_unicode()
     assert_eq!(picker.title, "Document outline");
     assert_eq!(picker.items[0].label, "café");
     assert_eq!(picker.items[0].detail, "module");
-    assert_eq!(picker.items[1].label, "βeta");
+    assert_eq!(picker.items[1].label, "  βeta");
     assert_eq!(picker.items[1].detail, "function · café");
 
     app.list = None;
@@ -877,6 +877,52 @@ fn document_outline_direct_colon_and_key_paths_share_identity_and_jump_unicode()
     )
     .unwrap();
     assert_eq!(app.active().selection, Selection::point(0));
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn document_outline_indents_markdown_hierarchy_and_preserves_filtered_jump() {
+    let directory = temporary("document-outline-indentation");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("outline.md");
+    fs::write(
+        &path,
+        "# Guide\n\n## Install\n\n#### Linux\n\n## Usage\n\n# Appendix\n",
+    )
+    .unwrap();
+    let mut app = App::new(Config::default(), Some(path)).unwrap();
+    app.execute_command("outline").unwrap();
+
+    let snapshot = app
+        .overlay_snapshots()
+        .into_iter()
+        .find(|overlay| overlay.kind == crate::snapshot::OverlayKind::ResultList)
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .rows
+            .iter()
+            .map(|row| row.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Guide", "  Install", "    Linux", "  Usage", "Appendix"]
+    );
+
+    type_text(&mut app, "Linux");
+    let snapshot = app
+        .overlay_snapshots()
+        .into_iter()
+        .find(|overlay| overlay.kind == crate::snapshot::OverlayKind::ResultList)
+        .unwrap();
+    assert_eq!(snapshot.rows.len(), 1);
+    assert_eq!(snapshot.rows[0].label, "    Linux");
+    assert_eq!(snapshot.rows[0].detail, "heading · Guide › Install");
+    assert_eq!(app.list.as_ref().unwrap().selected_item().unwrap().index, 2);
+    key(&mut app, KeyCode::Enter, Modifiers::NONE);
+    let range = app.active().selection.primary();
+    assert_eq!(
+        app.active_buffer().slice(range.from(), range.to() + 1),
+        "Linux"
+    );
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -924,8 +970,9 @@ fn document_outline_breadcrumbs_are_strictly_bounded_for_deep_many_items() {
     let deep_item = picker
         .items
         .iter()
-        .find(|item| item.label == "item_3999")
+        .find(|item| item.label.trim_start() == "item_3999")
         .unwrap();
+    assert_eq!(deep_item.label, format!("{}item_3999", " ".repeat(32)));
     assert!(deep_item.detail.contains('…'));
     assert!(deep_item.detail.contains("m62_"));
     fs::remove_dir_all(directory).unwrap();
@@ -1401,7 +1448,12 @@ fn typed_colon_paths_preserve_spaces_and_remove_balanced_quotes() {
 #[test]
 fn command_inventory_classifies_every_command_and_current_binding() {
     let bindings = crate::keymap::default_keymap().bindings();
-    assert_eq!(bindings.len(), 483, "current binding inventory changed");
+    let macos_bindings = if cfg!(target_os = "macos") { 3 } else { 0 };
+    assert_eq!(
+        bindings.len(),
+        517 + macos_bindings,
+        "current binding inventory changed"
+    );
 
     let mut rows = HashSet::new();
     for binding in bindings {
@@ -1423,7 +1475,11 @@ fn command_inventory_classifies_every_command_and_current_binding() {
             );
         }
     }
-    assert_eq!(rows.len(), 948, "mode-expanded binding inventory changed");
+    assert_eq!(
+        rows.len(),
+        1016 + 2 * macos_bindings,
+        "mode-expanded binding inventory changed"
+    );
 
     let shared_colon = COMMANDS
         .iter()
@@ -1489,14 +1545,14 @@ fn command_inventory_classifies_every_command_and_current_binding() {
             .iter()
             .filter(|exposure| **exposure == CommandExposure::SharedColon)
             .count(),
-        54
+        55
     );
     assert_eq!(
         exposures
             .iter()
             .filter(|exposure| **exposure == CommandExposure::ConfigurableOnly)
             .count(),
-        2
+        4
     );
     assert_eq!(
         exposures
@@ -1506,7 +1562,7 @@ fn command_inventory_classifies_every_command_and_current_binding() {
         EditorCommand::ALL.len()
             - INTERNAL_EDITOR_COMMANDS.len()
             - GRAMMAR_ONLY_EDITOR_COMMANDS.len()
-            - 57
+            - 60
     );
 
     for spec in COMMANDS {

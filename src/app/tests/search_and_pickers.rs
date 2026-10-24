@@ -786,7 +786,12 @@ fn yank_paste_and_prompt_editing_use_unicode_character_positions() {
 
 #[test]
 fn visual_yank_includes_the_character_under_the_cursor() {
-    for mut app in [App::new(Config::default(), None).unwrap(), vim_app("")] {
+    // Vim's `w` rests on the next word's first character and its visual yank
+    // takes it; Runyte's rests on the space before it, as Helix's does.
+    for (mut app, after_w) in [
+        (App::new(Config::default(), None).unwrap(), "Test "),
+        (vim_app(""), "Test T"),
+    ] {
         seed(&mut app, "Test Test");
 
         for motion in ['e', 'w'] {
@@ -796,7 +801,7 @@ fn visual_yank_includes_the_character_under_the_cursor() {
             press(&mut app, motion);
             press(&mut app, 'y');
 
-            let expected = if motion == 'e' { "Test" } else { "Test T" };
+            let expected = if motion == 'e' { "Test" } else { after_w };
             assert_eq!(
                 app.read_selected_register().text,
                 expected,

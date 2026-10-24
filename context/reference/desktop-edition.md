@@ -1,0 +1,657 @@
+# Desktop edition
+
+The desktop edition is a supported Runyte product built with
+`cargo build -p runyte-desktop`; `--window` selects its GPUI 0.2.2 frontend.
+It supports editor, IDE and persistent mux modes and also runs in a terminal.
+Decision 1 of the editions plan supersedes the former rule keeping the native
+window experiment only on `exp`. The public plugin contract is unchanged;
+window and terminal attachments share the private bundled-client protocol and
+require the same Runyte client/host version, regardless of edition.
+
+## Ownership
+
+GPUI owns the main thread, window, font rendering, image textures, media
+viewport transforms, and native clipboard ownership. The ordinary standalone
+host loop runs on one worker thread and retains editor commands, configured
+keymaps, filesystem operations, language services, Git, and PTYs. The existing
+Ratatui renderer writes into a `TestBackend`; GPUI draws its cells and cursor.
+No Zed editor widgets or separate editor command implementation are included.
+
+The native desktop identity is `com.runyte.Runyte`. Its icons derive from
+`logo/runyte_logo.svg`; the authored charcoal mark sits on a light rounded
+backplate. Linux Wayland resolves the matching installed desktop entry. X11
+also receives `_NET_WM_ICON` from one bounded background scan matching this
+process's PID and exact window class. GPUI 0.2.2's X11 raw-handle accessors are
+unimplemented, so the adapter does not call them. GPUI is vendored under
+`vendor/gpui` with Linux frame scheduling and paint fixes described in its
+[patch record](../../vendor/gpui/RUNYTE-PATCH.md).
+The macOS helper builds a local `.app` with an ICNS resource, launcher and
+project/dependency/font notices. Installation, regeneration and platform
+limits are documented in [the native packaging guide](../../contrib/packaging/README.md).
+
+Native builds embed four unmodified JetBrainsMono Nerd Font faces from Nerd
+Fonts v3.4.0 (JetBrains Mono 2.304): Medium, Medium Italic, Bold, and Bold Italic.
+They are registered before the window opens; both the cell grid and media
+labels use them. Font binaries add approximately 9.5 MiB only to native builds.
+Licenses and attribution live under `licenses/jetbrains-mono/`.
+
+The bridge retains the latest owned frame and coalesces wakeups. It does not
+poll on a GUI timer or enqueue every rendered frame. Physical input carries
+the identity of the frame painted when it was acquired. Pointer targeting and
+context review use that identity. Native approvals require a painted current
+surface; ordinary form text and navigation remain queueable. Plugin action
+preflight uses revision witnesses from a bounded history of actual painted
+frames, including actions invoked through configured bindings, menus and
+colon commands. Paint acknowledgements update viewport observations without
+synthesizing editor input or starting redraw loops.
+
+Approval admission currently compares the complete painted frame with the
+latest prepared frame and refuses activation while publication is pending.
+Unrelated status changes or sustained terminal output can therefore reject
+an approval key even when the decision itself has not changed; retrying after
+the display catches up is required. This conservative behavior does not drop
+ordinary form typing or navigation. Replacing it requires a stable approval
+lifecycle witness that includes hidden captured state, not only matching
+overlay labels: filesystem plans retain source fingerprints and uploads,
+reloads retain observation generations, and secret fields can change while
+their displayed bullets remain identical. The existing confirmation counter
+does not cover every approval owner or replacement. A common lifecycle
+witness is deferred rather than inferring authorization from visual equality.
+
+Media files are read-only generated projections with a separate `media_path`;
+they never acquire an editable file path, LSP document or save target. Existing
+file workflows intercept supported formats before external binary opening.
+PDF projections have one logical row per page. Escape first dismisses overlays
+or pending keys, then restores zoomed-in media to fit while preserving selection,
+then clears selection, and finally enters the `[pdf]` page buffer. Its ordinary
+text motions, counts and search choose a row, and Enter displays that page.
+Escape or `q` from page rows opens the PDF's directory with the file selected;
+in Select mode it first clears selection and returns to Normal. In media
+previews, `q` follows the same fit, clear-selection and leave order as Escape.
+Images use `[image]` and skip the page-buffer step. `Space e` goes directly to any media source's
+directory. Preview/page-buffer state belongs to the pane and is tied to the
+buffer identity; source page and view position survive returning via explorer.
+The old page-picker overlay and `g p` binding are removed.
+
+The native frontend renders owned snapshots using the same overlay geometry
+as the host-frame renderer. Window margins, media fills and `Reset` cell
+colours use the active theme's background and foreground, carried in each
+frame with its cells; a `reset` theme colour becomes a light or dark default
+that contrasts with the colour the theme defines.
+
+Scrolling outside media panes sends the host one scroll event, which moves
+three lines or columns, per wheel notch, as a terminal does. Touchpad and
+high-resolution deltas accumulate per axis into whole events, the dominant
+axis wins, and the remainder is discarded on reversal, after a 500 ms pause or
+when a platform reports a new gesture. Images remain behind key hints and prompts;
+only overlay cells paint above them. Media mouse input is blocked while an
+overlay owns input, including clicks on hints that would otherwise land on
+hidden page rows. Pane page counts are initialized even when a page buffer
+is entered before the first raster has rendered.
+
+The `Media` binding scope adds zoom/fit/copy controls and owns its pixel
+selection semantics. Core commands emit bounded requests addressed to the
+pane, path and page. Zoom, center, drag and extracted-text/region selection
+remain pane-local frontend state. Mouse focus names the media document rather
+than translating image pixels into synthetic PDF rows. Hit testing uses the
+painted media geometry. Source replacement clears stale selections.
+
+One bounded media worker decodes images and invokes the bundled Hayro helper
+or external Poppler fallback using argument vectors. Rasterization and text extraction stay off both UI
+loops. The LRU cache holds eight results. A bounded demand queue takes priority
+over speculative loading of two PDF pages on each side of the current page. New
+demand cancels an unrelated speculative job; speculative completion never
+extends its own prefetch window. The one worker blocks on its channel when
+idle. Fingerprinted page counts are retained separately in eight bounded
+entries so a reopened buffer can attach to cached rasters. Unchanged counts
+and speculative completions do not rewrite page rows or trigger redraws.
+Input, decoded allocation, dimensions,
+page count, helper duration and helper output have explicit limits. Child
+processes are killed and reaped on cancellation or limit failure. Scratch
+rasters and extracted XHTML for Poppler live in temporary directories; Hayro
+returns bounded RGBA bytes over a pipe. JPEG orientation
+is applied before display, hit testing or copying.
+
+Animated GIF/WebP decoding stays on that worker. Each animation retains at most
+1024 composited, reduced frames and 32 MiB of raster data; the eight-result base
+cache is capped at 256 MiB. Still-image decoding retains its existing limits.
+GIF repetitions and WebP total-play counts are normalized separately. Playback
+uses pane-local clocks, freezes the displayed frame during selection, and stops
+at the last frame after a finite loop count. A single earliest-deadline timer
+is armed through a GPUI next-frame callback, so compositor/visibility gating
+stops rearming for hidden windows. It never uses GPUI's refresh-rate image
+animation loop. Unused image textures are explicitly removed from the atlas.
+
+Hayro 0.8 is the default PDF backend, pinned with its interpreter and syntax
+crates in `runyte-native` (Rust 1.92; terminal edition MSRV remains 1.88).
+`--helper pdf` runs before frontend initialization. Each request owns a
+fresh parser/cache in a killable process: 128 MiB input, 1–10,000 pages,
+15-second wall/CPU limits, 1 GiB address space (plus initial mappings on macOS),
+and bounded metadata/RGBA output. The pipe reader rejects overflow while reading;
+cancellation kills/reaps the process group. No untrusted Hayro call runs on
+an editor thread. Base rasters use 1600px longest axis; detail rendering allocates
+only the requested crop, never the virtual 524288px page. Both backends use
+CropBox, including rotated-page word coordinates and detail regions.
+
+Fallback is automatic per request, without a sticky document/backend setting.
+Hayro warnings, error diagnostics, unresolved CMaps and fallback font requests
+trigger Poppler. Embedded and built-in standard fonts work offline; Hayro's
+recognized Latin font-name substitutions are allowed and can change spacing.
+There is no system-font resolver. `log` captures only a diagnostic flag inside
+the helper, because some upstream font failures bypass its WarningSink.
+`pdfinfo`/`pdftoppm` remain the external raster fallback. Missing Unicode or
+Type3 glyph geometry independently invokes `pdftotext -bbox-layout -cropbox`;
+`roxmltree` parses its bounded XHTML. Hayro words follow content-stream order,
+using transformed glyph boxes, baseline/gap grouping, and fill/stroke deduplication.
+This is heuristic reading order, without layout analysis. Scanned pages retain
+region selection, without OCR. If all extraction fails the raster stays usable;
+if both renderers fail the error names both backends. Empty-user-password
+PDFs are supported; there is no password prompt.
+
+`tests/native_pdf.py` exercises the actual helper with no Poppler on PATH on
+Linux and macOS CI: text, four CropBox rotations, columns, vectors, image scan,
+Form XObject, empty-password encryption, unsupported fonts, required passwords,
+damaged files, and extreme virtual-size cropped rendering. `--compare` records
+three-run median helper timings against all three Poppler tools; results and
+limits of this authored corpus are in the startup-performance register.
+GPUI publishes text clipboard data on Linux; `arboard` supplies image clipboard
+ownership because GPUI 0.2.2 does not publish image MIME data to other Linux
+applications. Both are Rust integrations; Poppler is installed separately.
+
+## Native document previews
+
+`:preview` displays a bounded capture of selected text or the complete source
+buffer through the desktop executable’s internal Blitz helper. Host state owns captures and
+dismissals; the frontend owns scroll, selection and cached rasters. Source
+editing state is preserved. The [document-preview reference](native-document-preview.md)
+records ownership, rendering boundaries, lifecycle and dated verification; the
+[preview guide](../../crates/runyte-preview/README.md) covers build steps,
+controls and resource limits. This static preview does not implement the
+[browser-pane proposal](../plans/proposed/PLAN_BROWSER_PANES.md).
+
+## Validation
+
+Run the ordinary repository checks, then the optional adapter checks:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo clippy -p runyte-native -p runyte-desktop -p runyte-preview --all-targets -- -D warnings
+cargo test -p runyte-native -p runyte-desktop -p runyte-preview
+cargo test -p runyte-native --lib \
+  media::tests::pdf_rasterizes_distinct_pages_and_reports_total_count \
+  -- --ignored --exact
+cargo llvm-cov --locked --package runyte
+```
+
+`src/app/tests/native_media.rs` covers normal file/explorer opening, read-only
+identity, startup positions and reuse, non-regular-file refusal, registry-backed
+media controls, page navigation, keyboard selection and explicit mouse targets.
+Native adapter tests cover input translation, painted-frame identity, approval
+refusal, PDF text coordinates, raster colors/alpha, region copying, EXIF,
+source invalidation, transforms and worker cleanup. The host's
+`plugin_frontend_presentation` tests cover queued form input, LSP permissions,
+all plugin action entry points and bounded presentation witnesses.
+
+`tests/native_window.py` drives a real GPUI window on an isolated X11 display.
+It requires Python, libX11, libXtst, Git and Poppler. It creates temporary
+workspace/config/runtime directories and uses a shell owned by that fixture.
+It checks first paint, modal edit/save, image and PDF opening, PDF page changes,
+keyboard and pointer zoom, drag pan, mouse and keyboard PDF text selection,
+actual system clipboard text/PNG bytes, hints, resize/splits, integrated PTY
+input, unsaved-close refusal and successful close after saving.
+
+```sh
+cargo build -p runyte-desktop
+# Run only against a dedicated display: clipboard tests take clipboard ownership.
+DISPLAY=:94 python3 tests/native_window.py --output /tmp/runyte-window-captures
+```
+
+The GUI acceptance has been exercised with Xvfb and Mesa lavapipe on Linux.
+This proves the X11 rendering/input path, including actual clipboard transfer;
+it does not establish macOS, Wayland, hardware-specific Vulkan, IME or touchpad
+pinch acceptance. The user guide records these limits and current media keys.
+
+## Measured acceptance — 2026-10-07
+
+On Linux, the default full suite and default/native all-target Clippy passed.
+The native adapter suite passed 13 tests, and the separately invoked Poppler
+acceptance passed. The final X11 window run passed every interaction above,
+including keyboard PDF selection and external clipboard reads. Canonical
+workspace coverage reported 92.01% lines (148,278 of 161,158), above the
+unchanged 89% floor. This canonical measure uses the default feature set;
+optional GPUI drawing is checked by the native tests and GUI acceptance.
+
+A separate six-second KDE Wayland desktop smoke check received toplevel
+configuration and attached a surface without errors or panics, then exited
+on SIGTERM. This establishes basic Wayland window startup/presentation only;
+Wayland gesture, clipboard and IME acceptance still require a platform run.
+
+## Prior acceptance: fonts and page picker — a0646aa, 2026-10-08
+
+That commit initially used `g p` for a shared PDF page picker at the current
+page. The subsequent Esc/page-buffer design above replaces that interaction.
+Cursor movement and filtering left the document selection unchanged until Enter;
+cancellation kept the original page. Rows captured pane/buffer identity and
+acceptance rejected stale destinations. `42gg` selected page 42 directly. Global `g p` and
+`g P` paragraph bindings were removed to reserve the spelling consistently;
+the paragraph commands remain configurable in Normal and Select modes.
+
+The isolated X11 acceptance passed with Fontconfig's system font directories
+disabled (`--no-system-fonts`). It exercises actual page-picker filtering and
+cursor acceptance as well as previous image/PDF interactions. It also reads
+`WM_CLASS` and `_NET_WM_ICON` from the real window and checks dimensions and
+ARGB colors. GPUI omits the final NUL in its X11 class property; the adapter
+accepts that exact form as well as the standard terminated form.
+
+Default and native all-target Clippy, the full default test suite, 15 native
+adapter tests, and three desktop packaging tests passed. Font metadata was
+checked for all four requested faces; `cargo package --list` includes the
+font binaries, icon assets, source SVG and license notices. The exp-only
+`native-window.yml` workflow adds Linux/macOS builds, tests and packaging
+checks plus Linux GUI acceptance; it has not run remotely for this change.
+macOS Finder/Dock and native interactions still need a Mac validation run.
+
+Canonical `cargo llvm-cov --locked --package runyte` verification reported 92.01%
+line coverage (148,340 of 161,215), above the unchanged 89% floor. The optimized
+release build also passed the full isolated X11 acceptance with system font
+directories disabled and the real icon property checked.
+
+## Esc navigation and neighboring-page cache — 2026-10-08
+
+The full default suite, default/native all-target Clippy, formatting checks,
+and native adapter tests passed on Linux. Canonical workspace coverage measured
+92.05% lines (148,594 of 161,429), above the unchanged 89% floor.
+
+The isolated X11 release acceptance passed with system font directories disabled.
+It covers selection clearing before leaving previews, PDF page-buffer motions
+and Enter, image/PDF source-directory navigation, restoring a PDF page after
+reopening from explorer, and visible media beneath hints. Clicks on the media
+and hint rectangles cannot move hidden page rows. A warmed next-page transition
+passed its 150 ms display check; this is fixture acceptance, not a latency
+guarantee for arbitrary documents. Scheduler tests cover bounded neighboring
+prefetch, demand priority and cancellation, promotion of an in-flight neighbor,
+LRU eviction, and source invalidation. macOS interaction acceptance remains
+unverified locally.
+
+## Cell painter and latency measurements — 2026-10-08
+
+The native view shares its latest immutable frame with the canvas through `Rc`.
+The cell painter retains up to 1,024 symbol layouts per font face (four faces),
+with a 256-byte per-symbol cache limit and FIFO eviction. Each symbol is shaped
+independently, preserving the existing absence of cross-cell ligatures and
+placing fallback glyphs at their cell origin. Foreground colours and decorations
+are applied at paint time, so theme changes do not invalidate glyph layouts.
+Glyphs use GPUI's public monochrome/emoji paint paths directly; decorations are
+submitted first to preserve the previous text layer's ordering over colour emoji.
+Ordinary rows share one logical text layer; the cursor row and rows with oversized
+or zero-width font advances keep per-cell layers to preserve ordering at overlaps. Backgrounds
+merge into horizontal colour runs, including root-coloured cells to preserve
+the same ordering floor on adjacent rows. Rows intersecting media retain the
+original per-cell backgrounds and layers because media has its own scene depth.
+Presentation acknowledgements and
+painted-frame admission retain their existing semantics.
+
+The earlier issue attributed batching failure categorically to per-cell layers.
+GPUI can batch disjoint layers with the same draw order. This change removes
+repeated layout/cache locking, per-cell allocations and layer bookkeeping;
+measurements below concern their combined CPU cost.
+
+Set `RUNYTE_NATIVE_PAINT_TIMING=1` to log `native-paint COLSxROWS Nus` to stderr.
+This opt-in trace measures cell-painter CPU scene construction, excluding GPU
+submission, display refresh and input-to-presentation latency. It records no
+buffer or keystroke contents and adds no timer or wakeup. With tracing disabled,
+the painter does not read the clock.
+
+The isolated X11 harness has two focused modes in addition to full acceptance:
+
+```sh
+# Dedicated X11 display only; use the same release profile and fonts for both binaries.
+RUNYTE_NATIVE_PAINT_TIMING=1 DISPLAY=:94 python3 tests/native_window.py \
+  --binary /tmp/runyte-before --paint-benchmark --output /tmp/paint-before
+RUNYTE_NATIVE_PAINT_TIMING=1 DISPLAY=:94 python3 tests/native_window.py \
+  --binary target/release/runyte --paint-benchmark --output /tmp/paint-after
+DISPLAY=:94 python3 tests/native_window.py --binary /tmp/runyte-before \
+  --paint-styles --output /tmp/styles-before
+DISPLAY=:94 python3 tests/native_window.py --binary target/release/runyte \
+  --paint-styles --output /tmp/styles-after --paint-reference /tmp/styles-before
+```
+
+The benchmark fills a 120×40 window with repeated text, warms the painter, types
+104 letters with 25 ms between keys, retains every paint sample in that interval,
+and verifies the saved text. Samples are frames, not individual keystrokes:
+coalescing and background redraws can change their count. The style comparison
+checks fixed terminal rows pixel-for-pixel, including font weights/styles,
+reverse/dim/hidden text, decorations, colour emoji, combining symbols, Nerd Font
+icons and wide-cell advancement. Actual CJK glyph appearance remains unverified
+on a machine without a CJK fallback font; missing-glyph boxes still test advance.
+
+### Measured acceptance
+
+Three alternating before/after release runs on Linux 7.2.8, AMD Ryzen AI 9 365,
+Xvfb and Mesa lavapipe, at 1080×800 logical pixels (120×40 cells). Builds and
+tests finished before measurement; ordinary desktop applications remained
+running. The baseline is `62fe897` with only the
+[timing observation patch](../../benchmarks/native-paint-before.patch) applied.
+The same harness and fonts were used for both binaries. Every run verified that
+all typed letters reached the saved document; no successful paint samples were
+removed. The [individual samples and binary hashes](../../benchmarks/results/native-paint-2026-10-08.json)
+retain the measurement provenance.
+
+| Round | Before median (min–max), ms | After median (min–max), ms |
+| --- | ---: | ---: |
+| 1 | 13.560 (12.830–19.241) | 0.989 (0.385–1.446) |
+| 2 | 13.494 (12.901–20.664) | 0.933 (0.388–1.542) |
+| 3 | 13.765 (12.895–29.118) | 0.797 (0.391–1.440) |
+
+The median of the three run medians fell from 13.560 ms to 0.933 ms, about
+14.5 times less CPU paint time for this fixture. This establishes a reduction
+in the diagnosed painting bottleneck; it does not establish a platform-wide
+input-to-display latency guarantee or a comparison with a terminal emulator.
+
+Formatting, default/native all-target Clippy, the full default test suite,
+31 native adapter tests and the explicitly invoked Poppler test passed. Canonical
+`cargo llvm-cov --locked --package runyte` reported 92.05% line coverage
+(148,738 of 161,582), above the unchanged 89% floor. The final release build
+passed full isolated X11 acceptance with system fonts disabled and exact
+styled-cell pixel comparison against the baseline with system fallback fonts.
+The latter includes 20 styled rows, alternating root/nondefault backgrounds,
+emoji and non-emoji runs, plus a cursor in a blank cell beside an italic icon.
+Actual CJK glyphs and macOS interaction/latency remain unverified locally.
+
+## Window font and clipboard controls
+
+`editor.font_size` selects 8–48 logical pixels (default 15), read before every
+window opens, independently of a retained host's configuration. Settings saves
+and reloads report it as startup-bound. Ctrl-plus/equal and Ctrl-minus change
+only the current window. `CellMetrics` scales the cell painter, pointer and
+media geometry, IME caret and terminal dimensions; resizing invalidates shaped
+glyph caches. Reserved window controls and their help use `keymap::native_window`.
+
+Native-feature builds retain an `arboard` clipboard connection in the host's
+clipboard port. This makes editor clipboard commands independent of Unix
+helper executables and preserves X11 ownership after a write. Media text copy
+uses GPUI and image copy retains its arboard owner. Ctrl-Shift-c reaches the
+registry's copy command; Ctrl-Shift-v reads clipboard text through GPUI and
+sends one bounded literal paste, including to terminal children and prompts.
+Normal-mode text paste retains the existing modal clipboard commands.
+
+The focused X11 acceptance is `tests/native_window.py --window-controls`,
+with `--mux` to include existing-host reattachment and a parent editor wait.
+It verifies text copy through both copy bindings, external clipboard reads,
+Ctrl-v and Ctrl-Shift-v, terminal paste, PTY size changes and configuration on
+reopening. All clipboard ownership is confined to the dedicated test display.
+
+The vendored `proc-macro-error2` 2.0.1 carries only the public `proc_macro`
+visibility correction needed by Rust's future-incompatibility check. GPUI
+0.2.2 brings it through stacksafe 0.1.4; see `vendor/proc-macro-error2/RUNYTE-PATCH.md`.
+
+### Validation — 2026-10-08
+
+Formatting, default/native all-target Clippy, the full default test suite and
+32 native adapter tests passed on Linux. The native release build with
+`--future-incompat-report` reported zero dependencies with future-incompatible
+warnings. Canonical `cargo llvm-cov --locked --package runyte` measured 92.04% line
+coverage (148,843 of 161,713), above the unchanged 89% floor; process-heavy
+fixtures ran with four test threads outside the execution sandbox.
+
+The complete isolated X11 window acceptance passed. The final release binary
+also passed `--window-controls` in standalone and persistent-session modes,
+including text/image clipboard round trips, terminal paste, font shortcuts,
+PTY geometry and config on reopening. The persistent run additionally verifies
+parent editor wait against the matching executable. macOS and Wayland
+clipboard/font interaction acceptance remains unverified locally.
+
+## On-demand frames — 2026-10-08
+
+GPUI 0.2.2 is built from the patched copy in `vendor/gpui` (provenance and the
+exact changes are in `vendor/gpui/RUNYTE-PATCH.md`). On X11 and Wayland a window
+is drawn when it becomes dirty: immediately when no frame was drawn during the
+last refresh interval, otherwise one interval after the previous frame, or on
+the pending `wl_surface.frame` callback. Idle windows have no refresh timer and
+request no frame callbacks. The Vulkan surface on X11 uses its own X connection
+so that the driver's presentation thread cannot consume input events from
+GPUI's connection. macOS keeps GPUI's display-link frames.
+
+`tests/native_window.py --latency` measures key-to-pixel latency for 60
+isolated keystrokes in Insert mode at 120×40 cells (XTest press, `XGetImage`
+readback of the edited row) and then counts the window process's context
+switches over five idle seconds. Each key must reach the screen within one
+second; `--max-idle-wakeups` turns the idle count into an assertion, which CI
+sets to 30 per second.
+
+### Measured acceptance
+
+Linux 7.2.8, AMD Radeon 880M (RADV), release builds, a rootful Xwayland server
+at 60 Hz inside a headless KWin virtual output (no other clients):
+
+| Build | Median | p90 | Max | Idle context switches |
+| --- | ---: | ---: | ---: | ---: |
+| Registry GPUI 0.2.2 | 12.6–15.9 ms | 29.2–29.7 ms | 33.2–33.3 ms | 71–73 per second |
+| Patched GPUI | 4.6–5.2 ms | 5.7–6.5 ms | 6.3–7.0 ms | 9 per second |
+
+GPUI's rule that re-presents an unchanged scene on every frame request for one
+second after input applies only to platforms without on-demand frames, so a
+Linux window renders nothing unless something changed.
+
+Per-thread figures for the same build (process CPU time and context switches
+from `/proc`, 120 alternating `x`/Backspace keys 100 ms apart on a 1,200-line
+Rust file):
+
+| Thread | Window, CPU per key | Terminal frontend in a PTY, CPU per key |
+| --- | ---: | ---: |
+| Syntax worker | 3.2–3.4 ms | 3.5 ms |
+| Host loop | 3.0 ms | 3.2 ms |
+| GPUI main thread | 2.0 ms | (terminal emulator, not measured) |
+
+While idle, the GPUI main thread does not wake at all. The window process
+wakes about 8.7 times per second, the terminal frontend about 7; both come
+from the host's maintenance timers, file and Git monitors, and tokio workers.
+A tokio blocking thread present only in the window accounts for the difference
+(2 per second). Moving the pointer over an idle window costs about 127 context
+switches per second against 468 before, and renders nothing.
+
+An independent probe that reads back only the start of the edited row measured
+the patched window at 3.9–4.5 ms median (p90 below 5.3 ms), against 3.8 ms
+median for `runyte --ide` in Alacritty on the same display before the change.
+A diagnostic GPUI build that polled every millisecond measured 3.3–3.6 ms; it
+kept the processor awake with about 1,000 wakeups per second and is not a
+usable configuration.
+
+The full isolated X11 acceptance passed with the patched build in standalone,
+`--mux`, `--window-controls` and `--window-controls --mux` modes. Persistent
+modes need the tested binary first on `PATH` and a short temporary directory
+for the workspace socket. The Wayland scheduler has not been exercised at
+runtime: the headless compositor offers no input injection, and its virtual
+output did not deliver frame callbacks even to the unpatched build, which
+painted once and then stopped. It needs a run on a Wayland desktop. macOS is
+unchanged.
+
+## Frame geometry during font changes and resize — 2026-10-08
+
+The window keeps the metrics associated with each incoming grid, including
+intermediate frames from rapid font changes. A bounded history retains 64
+recent grid requests; frames older than that history are ignored until a
+recognised frame arrives, while the previous complete frame remains visible.
+When two font sizes produce the same grid, the newer metrics can be used
+immediately because the cell layout has not changed. Pointer mapping, media,
+cursor painting and the IME caret continue to use the displayed frame's metrics.
+
+Attached snapshots render at `snapshot.editor.geometry.screen`, rather than
+being copied into a buffer sized for a newer window request. This preserves the
+host's actual grid identity in persistent-session mode without a protocol
+change, timer, or extra round trip. A stale grid during window resizing keeps
+its own size, with theme-coloured margins or clipping until its replacement.
+
+## Sharing immutable cell rows — 2026-10-08
+
+`Surface::draw` now uses a fullscreen `GridBackend` instead of copying a
+`TestBackend` buffer. Ratatui's changed-cell iterator updates copy-on-write
+`Arc<[Cell]>` rows; publishing a frame clones only the row references. A row is
+copied on its first change while a published frame still owns it, and subsequent
+changed cells reuse that row. Every frame retains the full grid, including
+changes in frames skipped by the GUI. Resize and clear produce a fresh grid
+without mutating any frame retained by the painter. The core renderer and
+Ratatui's own layout/diff buffers are unchanged.
+
+## Reusing cell styles and painted rows — 2026-10-08
+
+The painter prepares colours, logical widths, background runs and media coverage
+once per changed row. ASCII glyphs use direct-indexed slots; each face still
+retains at most 1,024 layouts, and theme changes retain shaped layouts. Unchanged
+rows replay the immediately preceding GPUI scene segment, avoiding repeated glyph
+raster-bound and atlas lookups. The small `SceneCache` API in the vendored GPUI
+checks window/frame identity, scale, clipping and opacity; Runyte also
+checks source row identity, colours, coverage, font metrics and cursor-row status.
+It retains no additional scene, texture or shaped layout. Every redraw still
+registers the ordinary input handler and acknowledges the frame it actually paints.
+
+Styled terminal captures, including wide glyphs, combining marks, decorated
+emoji, reversed and hidden text, matched the pre-change release pixel for pixel
+with `tests/native_window.py --paint-styles --paint-reference`. Native row tests
+cover invalidation on changed cells, default colours and media/overlay coverage.
+
+A repeated before/after run on isolated Xvfb with lavapipe software Vulkan gave:
+
+| Grid | Before median | After median |
+| --- | ---: | ---: |
+| 120×40 | 881 µs | 402 µs |
+| 213×70 | 1,591.5 µs | 882 µs |
+| 266×88 | 1,773.5 µs | 959 µs |
+
+These are release `RUNYTE_NATIVE_PAINT_TIMING=1` scene-construction measurements,
+not GPU time or key-to-screen latency. Absolute software-display timings varied
+between runs; an earlier comparison measured 798 → 542.5 µs at 120×40 and
+1,729 → 941 µs at 266×88. No build ran during the comparisons. Raw repeated-run
+samples and binary hashes are in
+`benchmarks/results/2026-10-08-native-cell-paint.json`. The baseline was `f0b4f8f`
+plus the inherited geometry draft; the benchmark uses a fixed font and grid.
+Use `--paint-font-size` and `--paint-window WIDTH HEIGHT` with `--paint-benchmark`
+to reproduce different grids. The tested sizes used fonts 15, 10 and 8, and
+windows 1080×800, 1280×940 and 1280×940. Hardware GPU and Wayland comparisons
+remain unmeasured.
+
+## Bounded native input and frame batching — 2026-10-08
+
+Native physical input has a separate 4,096-event FIFO, bounded to 8 MiB of pasted
+text; the latest presentation acknowledgement occupies its own slot. Adjacent
+queued drags coalesce only across identical attachment, painted frame, button
+and modifiers. Rejected input sets a sticky window notice independently of host
+progress. The queue wakes the host with a notification, not a polling timer.
+
+Standalone native input drains already queued keys/text before preparing the
+result, with a limit of 64 applied inputs per frame. A lone input paints
+immediately. Deferral marks publication pending before admitting the next input,
+so unseen confirmations cannot inherit the preceding frame's approval identity.
+Pointer and lifecycle events are publication barriers; redundant drags are
+coalesced in the queue while geometry-sensitive pointer handling remains tied to
+the original frame. The terminal frontend and persistent-session host retain
+their existing publication loops. `tests/native_window.py --input-burst` exercises
+512 rapid physical characters and checks the saved text, alongside unit tests
+that apply 129 inputs through a real host and observe publications at 64/128/129.
+
+## Follow-up validation — 2026-10-08
+
+The completion through `2d85e47` passed the full default suite, formatting,
+default/native all-target Clippy with warnings denied, and the native binary
+suite (115 tests, three ignored). The real-Poppler ignored rasterization test
+also passed. Canonical Linux workspace line coverage is 92.06%, above the
+unchanged 89% floor; details are in `context/reference/test-coverage.md`.
+
+The final debug build passed isolated X11/lavapipe acceptance for ordinary media
+and persistent-session handoff, standalone and persistent font/clipboard controls,
+512-character input bursts in both modes, embedded-font-only media/handoff in
+both modes, and styled pixels against the baseline.
+With 60 isolated keys at 120×40, the same debug/software-rendered setup measured
+11.53 ms median, 12.45 ms p90, and 8.6 idle context switches per second, passing
+the CI idle limit of 30. These are debug/software-display results, not comparable
+to the earlier release/Radeon latency measurements. Real Wayland desktop and
+macOS runtime validation remain outstanding.
+
+## Editions Phase 4: one desktop executable (2026-10-10)
+
+Document preview now links into `runyte-desktop` and runs as a bounded child
+through `--helper preview`; PDF uses `--helper pdf`. Both launch through the
+shared process-group and executable-identity owner. The terminal edition retains
+its own dependency graph; the shared lock updates its ICU subtree to the versions
+required by the pinned preview engine, without raising Rust 1.88.
+
+Linux x86-64 release measurements compare the Phase 3 implementation (`e5a0993`)
+with the integrated executable, using Rust 1.97.1 and the same fixtures/harnesses:
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Stripped desktop executable, bytes | 92,197,552 | 106,833,936 |
+| First `--version` after advisory file-cache eviction, ms | 15.633 | 18.148 |
+| Ten warm fresh `--version` processes, median ms | 2.913 | 3.591 |
+| Xvfb/lavapipe window mapping, ms | 201.430 | 200.826 |
+| 120×40 window, 60-key latency median / p90 / max, ms | 6.20 / 6.84 / 7.35 | 6.87 / 8.07 / 9.12 |
+| Idle context switches / second | 9.2 | 9.0 |
+| PDF helper peak address space, bytes | 113,078,272 | 127,721,472 |
+| PDF headroom under the 1 GiB Linux limit | 89.47% | 88.11% |
+| Stripped terminal executable, bytes | 56,096,832 | 56,103,616 |
+
+File-cache eviction uses `posix_fadvise(DONTNEED)`, which is a hint rather than
+proof of a cold disk. Window mapping is polled at 100 ms and does not measure
+complete first paint. The same largest checked-in PDF fixture (937 bytes) is
+used for both memory measurements; this is a regression check, not a bound for
+all PDFs. Headroom remains well above the 25% stop threshold. These are single
+machine observations, not a platform-wide latency guarantee.
+
+Real preview acceptance passes through the release executable, including
+selection at fractional and doubled scales, retained scroll, zoom, resize,
+asset denial and malformed/oversized input. Packaged X11 acceptance passes,
+including scrolling while the preview child is paused, overlay composition,
+clipboard, Escape and selected-section captures. PDF acceptance also passes
+with Poppler absent from PATH. The release build reports zero dependency
+future-incompatibility warnings.
+
+Terminal startup medians (five runs, first document content emitted, isolated
+120×40 PTY) were 16/16/24/96 ms for short/medium/long/huge text and
+13/12/21/86 ms for the Lua fixtures, compared with 12/13/23/97 ms and
+15/12/20/106 ms before integration. Idle CPU remains 0.10% across three
+independent ten-second windows, with zero screen writes.
+
+Because short text initially moved by a few milliseconds, a direct comparison
+then measured the preserved Phase 3 terminal binary and the new terminal binary
+in the same harness run, ten samples per fixture. First-content medians were:
+
+| Fixture | Before, ms | After, ms |
+| --- | ---: | ---: |
+| short text | 12 | 12 |
+| medium text | 16 | 15 |
+| long text | 23 | 21 |
+| huge text | 114 | 100 |
+| short Lua | 15 | 13 |
+| medium Lua | 15 | 14 |
+| long Lua | 23 | 21 |
+| huge Lua | 72 | 71 |
+
+This paired run shows no terminal startup regression. The variation between
+separate runs is why the isolated initial medians are retained above too.
+
+## Edition packaging acceptance — 2026-10-10
+
+The [desktop CI run for `ee80c9c`](https://github.com/runyte/runyte/actions/runs/38082924155)
+passes on native Ubuntu 24.04 x86-64 and ARM64 runners and macOS 15. Both Linux
+architectures pass extracted-package preview, PDF without Poppler, bundled-font
+window rendering, persistent-session handoff, animation, clipboard and font
+controls. Linux desktop archives can therefore be published for both targets.
+
+| Linux runner | Desktop line coverage | 60-key median / p90 / max, ms | Idle context switches / second |
+| --- | ---: | ---: | ---: |
+| x86-64 | 48.65% | 20.90 / 22.00 / 22.60 | 8.4 |
+| ARM64 | 48.64% | 27.14 / 28.79 / 30.62 | 9.2 |
+
+These are hosted-runner debug builds with Xvfb/lavapipe at 120×40, not release
+latency guarantees or a controlled cross-architecture comparison. Both exceed
+the 40% coverage floor and remain below the 30-per-second idle limit.
+
+macOS acceptance builds both architectures of the editor and native launcher,
+checks universal slices, the macOS 11 deployment floor and system-only dynamic
+libraries, then runs headless preview acceptance from the bundle. Unsigned DMG
+construction, read-only mounting, contents and detachment also pass. The bundle
+uses `RunyteLauncher` beside `runyte` to keep filenames distinct on default
+case-insensitive filesystems. Signing, notarization, quarantine/Finder launch
+and real macOS window acceptance remain the joint manual Phase 8 work.

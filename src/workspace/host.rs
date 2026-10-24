@@ -217,6 +217,14 @@ struct PreparedFrame {
 }
 
 #[derive(Clone, Debug)]
+struct FrontendPresentation {
+    id: FrameId,
+    views: std::collections::BTreeMap<usize, (usize, u64)>,
+    viewports:
+        std::collections::BTreeMap<(usize, String, usize), crate::plugin::observation::Snapshot>,
+}
+
+#[derive(Clone, Debug)]
 struct PendingAutomaticGitRefresh {
     id: GitRequestId,
     spec: RefreshSpec,
@@ -308,6 +316,7 @@ pub struct WorkspaceHost {
     services: ServiceLifecycle,
     next_frame: u64,
     prepared: Option<PreparedFrame>,
+    plugin_presentations: VecDeque<FrontendPresentation>,
     last_git_refresh: Instant,
     last_automatic_git_refresh_request: Option<Instant>,
     git_dirty: bool,
@@ -430,6 +439,7 @@ impl WorkspaceHost {
             services: ServiceLifecycle::new(256),
             next_frame: 1,
             prepared: None,
+            plugin_presentations: VecDeque::new(),
             last_git_refresh: Instant::now(),
             last_automatic_git_refresh_request: None,
             git_dirty: false,
@@ -1385,6 +1395,27 @@ impl WorkspaceHost {
             pointer_compatible_since,
             view,
         });
+        if self.app.plugins.deferred_presentation {
+            let views = self.app.plugin_view_presentation();
+            // Derive viewport observations from this prepared frame without
+            // publishing them until the asynchronous frontend paints it.
+            let presented = std::mem::replace(&mut self.app.plugins.presented_views, views.clone());
+            let cached = self.app.plugins.viewport_cache.clone();
+            self.app
+                .capture_plugin_viewports(&self.prepared.as_ref().unwrap().view);
+            let viewports = std::mem::replace(&mut self.app.plugins.viewport_cache, cached);
+            self.app.plugins.presented_views = presented;
+            self.plugin_presentations.push_back(FrontendPresentation {
+                id,
+                views,
+                viewports,
+            });
+            // Input may lag rendering, but retained presentation witnesses
+            // must remain bounded. Expired witnesses fail closed on actions.
+            while self.plugin_presentations.len() > 32 {
+                self.plugin_presentations.pop_front();
+            }
+        }
         let active_buffer = self.app.active().buffer;
         HostFrame {
             id,
@@ -1397,6 +1428,56 @@ impl WorkspaceHost {
 
     pub fn context_frame_presented(&mut self, frame: FrameId) {
         self.app.note_context_presented(frame.0);
+    }
+
+    /// Opt in before preparing frames when drawing and host dispatch run on
+    /// separate threads. Synchronous terminal frontends retain their lifecycle.
+    pub fn defer_frontend_presentation(&mut self, deferred: bool) {
+        self.app.plugins.deferred_presentation = deferred;
+        self.app.plugins.presented_views.clear();
+        self.plugin_presentations.clear();
+    }
+
+    /// Restore exactly the plugin revisions painted when this input was
+    /// captured, including for colon commands and configured action bindings.
+    pub fn acknowledge_frontend_input_frame(&mut self, frame: Option<FrameId>) {
+        if self.app.plugins.deferred_presentation {
+            self.app.plugins.presented_views = self
+                .plugin_presentations
+                .iter()
+                .find(|presentation| Some(presentation.id) == frame)
+                .map(|presentation| presentation.views.clone())
+                .unwrap_or_default();
+        }
+    }
+
+    /// Painting can complete without a physical input. Publish the retained
+    /// viewport observations without preparing another frame or synthesizing
+    /// editor input, which would create a redraw/acknowledgement loop.
+    pub fn acknowledge_frontend_paint(&mut self, frame: Option<FrameId>) {
+        self.acknowledge_frontend_input_frame(frame);
+        if self.app.plugins.deferred_presentation {
+            self.app.plugins.viewport_cache = self
+                .plugin_presentations
+                .iter()
+                .find(|presentation| Some(presentation.id) == frame)
+                .map(|presentation| presentation.viewports.clone())
+                .unwrap_or_default();
+        }
+        if let Some(frame) = frame {
+            self.context_frame_presented(frame);
+        }
+    }
+
+    pub fn accepts_frontend_input(
+        &self,
+        input: &InputEvent,
+        presented: Option<FrameId>,
+        publication_pending: bool,
+    ) -> bool {
+        !self.app.plugins.deferred_presentation
+            || !self.app.input_requires_presented_approval(input)
+            || (!publication_pending && presented.is_some() && presented == self.current_frame_id())
     }
 
     pub fn current_frame_id(&self) -> Option<FrameId> {
@@ -1470,14 +1551,21 @@ impl WorkspaceHost {
                 frame,
                 repetitions,
             } => {
-                // Release ends a gesture even if autoscroll has since published
-                // a newer projection. It does not resolve any coordinates.
+                let pane_release = matches!(event.kind, crate::input::PointerEventKind::Up(_))
+                    && self.app.pointer_pane_drag_active();
+                // Selection/resize release needs no coordinates. A pane drop
+                // does, and must publish a frame that removes its outline.
                 if matches!(event.kind, crate::input::PointerEventKind::Up(_))
+                    && !pane_release
                     && self.app.cancel_pointer_drag()
                 {
                     return Ok(HostInputOutcome::AppliedWithoutVisualChange);
                 }
                 let Some(prepared) = self.prepared.as_ref() else {
+                    if pane_release {
+                        self.app.cancel_pointer_drag();
+                        return Ok(HostInputOutcome::Applied);
+                    }
                     return Ok(HostInputOutcome::IgnoredStaleFrame);
                 };
                 let continued_selection = self.app.pointer_selection_drag_active()
@@ -1488,6 +1576,10 @@ impl WorkspaceHost {
                 if (frame < prepared.pointer_compatible_since && !continued_selection)
                     || frame > prepared.id
                 {
+                    if pane_release {
+                        self.app.cancel_pointer_drag();
+                        return Ok(HostInputOutcome::Applied);
+                    }
                     return Ok(HostInputOutcome::IgnoredStaleFrame);
                 }
                 match self
@@ -2264,6 +2356,77 @@ mod tests {
         );
         assert!(host.pointer_autoscroll_delay(Instant::now()).is_none());
         assert!(!host.advance_pointer_autoscroll(Instant::now() + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn pane_drop_release_moves_on_a_compatible_frame_and_cancels_on_a_stale_one() {
+        for stale in [false, true] {
+            let mut host = host();
+            host.app_mut()
+                .execute(
+                    CommandInvocation::editor(
+                        EditorCommand::SplitVertical,
+                        CommandExecutionContext::default(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let pane = host.app().active_pane;
+            let first = host.prepare_frame(geometry());
+            let source = first.editor.pane(pane).unwrap().area;
+            let press = PointerEvent {
+                kind: PointerEventKind::Down(PointerButton::Left),
+                column: source.x + source.width / 2,
+                row: source.y + source.height / 2,
+                modifiers: Modifiers::ALT,
+            };
+            host.execute(HostCommand::Pointer {
+                event: press,
+                frame: first.id,
+                repetitions: 1,
+            })
+            .unwrap();
+            let drag = PointerEvent {
+                kind: PointerEventKind::Drag(PointerButton::Left),
+                column: 40,
+                row: 0,
+                ..press
+            };
+            host.execute(HostCommand::Pointer {
+                event: drag,
+                frame: first.id,
+                repetitions: 1,
+            })
+            .unwrap();
+            let preview = host.prepare_frame(geometry());
+            let destination = preview.editor.pane_drop.expect("drop preview");
+            if stale {
+                let mut resized = geometry();
+                resized.screen.width = 100;
+                resized.editor.width = 100;
+                host.prepare_frame(resized);
+            }
+            assert_eq!(
+                host.execute(HostCommand::Pointer {
+                    event: PointerEvent {
+                        kind: PointerEventKind::Up(PointerButton::Left),
+                        ..drag
+                    },
+                    frame: preview.id,
+                    repetitions: 1,
+                })
+                .unwrap(),
+                HostInputOutcome::Applied,
+                "release must remove the visible outline"
+            );
+            assert!(!host.app().pointer_pane_drag_active());
+            let final_frame = host.prepare_frame(geometry());
+            assert!(final_frame.editor.pane_drop.is_none());
+            assert_eq!(
+                final_frame.editor.pane(pane).unwrap().area,
+                if stale { source } else { destination }
+            );
+        }
     }
 
     #[test]
@@ -3268,7 +3431,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn parent_wait_multi_file_completion_and_detach_cancellation_retain_origin() {
+    fn parent_wait_multi_file_completion_and_cancellation_retain_origin() {
         let root = std::env::temp_dir().join(format!(
             "runyte-parent-wait-{}-{}",
             std::process::id(),
@@ -3312,9 +3475,9 @@ mod tests {
         let (cancelled, _) = host
             .create_parent_wait_request(terminal, vec![first])
             .unwrap();
-        host.cancel_parent_waits("outer TUI detached");
+        host.cancel_parent_waits("host shutting down");
         assert!(
-            matches!(host.wait_status(cancelled), Some(WaitStatus::Cancelled { reason }) if reason == "outer TUI detached")
+            matches!(host.wait_status(cancelled), Some(WaitStatus::Cancelled { reason }) if reason == "host shutting down")
         );
         assert!(host.app.terminals.get(terminal).unwrap().live());
         assert_eq!(host.app.panes.len(), 1);

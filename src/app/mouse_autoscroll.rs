@@ -27,7 +27,8 @@ impl App {
     /// Returns whether Runyte owned a gesture, rather than the terminal child.
     pub fn cancel_pointer_drag(&mut self) -> bool {
         self.finish_selection_drag();
-        let owned = self.pointer_drag.take().is_some();
+        let owned = self.pointer_drag.take().is_some() || self.pane_pointer_owned;
+        self.pane_pointer_owned = false;
         self.pointer_autoscroll = None;
         owned
     }

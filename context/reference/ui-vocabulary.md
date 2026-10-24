@@ -30,6 +30,18 @@ them, regardless of which extensibility direction is chosen.
   `gw` dims tree rows and replaces visible entry markers with jump labels;
   completing a label selects its path without opening it.
 - **Pane border** — the frame delimiting a pane.
+- **Pane drop outline** — a temporary thick accent outline during an Alt-left-drag
+  or Shift-Alt-left-drag,
+  showing the area the dragged pane would occupy on release. The interior stays
+  visible. A layout-edge target spans that whole edge, a pane-edge target splits
+  its destination, and a pane-middle target exchanges complete contents.
+  Shift-Alt-drag extends the pane in place to a neighbouring pane's far edge;
+  the outline shows its enlarged rectangle. Neighbours shrink or close as with
+  `:wc`, and adjacent panes fill gaps left by closures. Buffers and terminal
+  sessions survive. The modifiers at the press choose the gesture until release.
+  `EditorSnapshot.pane_drop` carries only the optional rectangle; the editor
+  owns hit testing and the move. Private bundled-client protocol version 80
+  carries this field for both terminal and desktop attachments.
 - **Pane title** — structural buffer identity in the pane's top border, such as
   `[file] path`, `[explorer] path`, `[notifications]`, or `[log]`, plus `[+]`,
   `[STALE]`, and `[RO]`, in that order, and finally `[zen]` or `[fullscreen]`
@@ -109,7 +121,7 @@ them, regardless of which extensibility direction is chosen.
   under its pane, and a dirty one remains open and discoverable until saved or
   discarded. The editable
   explorer and commit-message buffer are special;
-  pathless scratch text is not. The complete scoped set is `Directory`,
+  pathless scratch text is not. The complete scoped set is `Media`, `PdfPages`, `Directory`,
   `Settings`, `GitStatus`, `GitBranches`, `GitConflicts`, `GitWorktrees`, `GitComparison`,
   `GitRevisionDiff`, `GitNetwork`, `GitLog`, `GitBlame`,
   `GitStash`, `WorkspaceSearch`, `Help`, `CommitMessage`, and `Diff` in
@@ -138,7 +150,11 @@ them, regardless of which extensibility direction is chosen.
 - **Rendered page** — a generated read-only buffer holding a document as it is
   meant to be read rather than as it is written. `?` renders the active
   Markdown document into one and returns from it to the source; both stay open,
-  and the page is regenerated from the buffer, so it shows unsaved work. Its
+  and the page is regenerated from the buffer, so it shows unsaved work. A
+  pane's buffer history records which of the two it last showed, and opening
+  the document by name returns to that one; positional requests open the
+  source. The page lives exactly as long as its document: it closes with it
+  and is not subject to detached special-buffer retention. Its
   markers are absent because they were never written into it: nothing is
   concealed, and a row and a column in the page mean what they say. Like every
   generated page it carries semantic colour spans over ordinary buffer offsets,
@@ -159,6 +175,9 @@ them, regardless of which extensibility direction is chosen.
 - **Picker overlay** — a transient choose-one overlay. Printable input filters
   candidates, Enter accepts the selected candidate, and Escape, `Ctrl-c`, or
   an initial effective leader (bare Space by default) cancels the request.
+  The document outline indents names two spaces per parent level, capped at
+  32 spaces. Filtering preserves that source hierarchy and the muted parent
+  breadcrumbs; indentation is presentation only, excluded from search text.
   Every overlay that owns its own typed query — the project finder in all
   three scopes and the filterable
   result lists alike — draws that query on the first line under its title,
@@ -779,3 +798,58 @@ the absolute number; wrapped continuations retain arrows and folded document
 lines count toward distances. `editor.line_numbers` still controls gutter
 number visibility. Private bundled-client protocol version 73 carries the
 per-pane document-row origin, including when the cursor is outside the viewport.
+
+## Experimental native frontend
+
+The optional GPUI window renders the same Runyte screen as a grid of logical
+pixel cells. A **media projection** is a read-only generated buffer with an
+explicit source path separate from its text save identity. Titles identify
+PDF documents with `[pdf]` and images with `[image]`. Overlays and key hints
+remain above the media surface; image placeholder text is not a user-facing
+page, and opening a hint does not enter a PDF's page buffer.
+
+A **PDF page buffer** is the document's read-only list of pages, one logical
+row per page. Escape from a displayed PDF page enters the page buffer at its
+current page. Ordinary buffer cursor motions, counts and search choose a row;
+Enter displays that page. This is a buffer, not a filterable picker overlay.
+Escape from the page buffer opens the source directory with the PDF selected.
+Images have no page buffer: Escape opens their source directory directly.
+Escape dismisses an existing overlay or pending sequence and clears an active
+media selection before performing these navigation transitions. `Space e`
+opens the source directory directly and focuses its file for both media types.
+
+Native media zoom, pan and pixel/text selection are pane-local presentation
+state. Extracted PDF text selection and image-region selection do not change
+the page buffer's rows or the underlying read-only file.
+Animated GIF/WebP playback is also pane-local: a region selection freezes its
+displayed frame for copying, and clearing that selection resumes playback.
+
+The native media surface owns pixel selection and clipboard actions; its scoped
+overrides are intentional and validated alongside other owned input surfaces.
+Ordinary text-buffer scopes still cannot shadow global keys. The PDF page buffer
+uses ordinary text navigation and a contextual Enter action to display a page.
+
+## Native media across frontend attachments
+
+Image and PDF projections remain host-owned read-only buffers. Pane snapshots
+carry their local path, selected page, page count, and whether the pane displays
+the PDF page buffer. The window decodes and composites media locally. Terminal
+clients preserve `[image]` / `[pdf]` titles and display
+`MEDIA UNSUPPORTED IN THE TERMINAL MODE` in a media surface's body; the PDF page
+buffer remains ordinary selectable text. The attached frontend declares its
+media capability at the handshake, which controls subsequent binary opening.
+
+Native window font size is `editor.font_size` in the settings page, measured
+in logical pixels (8–48, default 15). Saving it selects the next window's
+starting size. Ctrl-plus/minus changes only the current window; cell drawing,
+mouse coordinates, media bounds, IME caret bounds, and PTY geometry use the
+same scaled metrics. Contextual help appends the reserved window controls
+from `keymap::native_window`.
+
+
+The **document preview** is a native frontend surface over a pane's
+source buffer, not a rendered-page buffer or a browser pane. A bounded capture
+contains selected text or the entire current buffer. Engine types, raster,
+scroll and document-text selection belong to the native frontend and its helper.
+The source buffer keeps its editing state. See the
+[preview lifecycle](../../crates/runyte-preview/README.md).

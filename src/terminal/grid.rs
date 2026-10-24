@@ -86,6 +86,12 @@ pub struct Pen {
     pub attributes: Attributes,
 }
 
+/// Code points a cell holds after its first. The longest standard emoji, a
+/// kiss with two skin tones, has nine; one more is spare. A cell still owns
+/// no heap allocation, and the workspace budget is in bytes, so a larger
+/// cell means fewer scrollback cells rather than more memory.
+pub const COMBINING_CAPACITY: usize = 10;
+
 /// One grid cell.
 ///
 /// A double-width character occupies two cells: the first carries the
@@ -95,10 +101,10 @@ pub struct Pen {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cell {
     pub character: char,
-    /// Bounded combining marks attached to `character`. Three covers the
-    /// common canonical and emoji-modifier cases without making a cell own a
-    /// heap allocation or weakening the workspace memory bound.
-    pub combining: [char; 3],
+    /// Bounded code points that continue `character`'s cluster: combining
+    /// marks, variation selectors, and the joiners and parts of an emoji
+    /// sequence.
+    pub combining: [char; COMBINING_CAPACITY],
     pub combining_len: u8,
     pub width: u8,
     pub foreground: Color,
@@ -110,7 +116,7 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             character: ' ',
-            combining: ['\0'; 3],
+            combining: ['\0'; COMBINING_CAPACITY],
             combining_len: 0,
             width: 1,
             foreground: Color::Default,
@@ -128,10 +134,44 @@ impl Cell {
         text
     }
 
+    /// The text to draw: one that measures exactly the cell's width, because
+    /// a frontend places a cell by measuring what it draws.
+    ///
+    /// A cell's own text usually does. An emoji sequence written without its
+    /// presentation selectors may not: `🤷‍♂` measures three cells, though a
+    /// terminal that joins it shows the two-cell `🤷‍♂️`, so that is drawn
+    /// instead. Anything else that does not fit, such as a selector that
+    /// arrived with no column left to widen into, draws its base character.
+    /// Copied text is never rewritten; only the drawing is.
+    pub fn display_text(self) -> String {
+        let width = usize::from(self.width.max(1));
+        let text = self.text();
+        if crate::grapheme::width(&text) == width {
+            return text;
+        }
+        let mut presented = String::with_capacity(text.len() + 8);
+        let mut characters = text.chars().peekable();
+        let mut after_joiner = false;
+        while let Some(character) = characters.next() {
+            presented.push(character);
+            if after_joiner && characters.peek() != Some(&'\u{FE0F}') {
+                presented.push('\u{FE0F}');
+            }
+            after_joiner = character == '\u{200D}';
+        }
+        if crate::grapheme::width(&presented) == width {
+            return presented;
+        }
+        if crate::grapheme::width(self.character.encode_utf8(&mut [0; 4])) == width {
+            return self.character.to_string();
+        }
+        " ".repeat(width)
+    }
+
     fn blank(pen: Pen) -> Self {
         Self {
             character: ' ',
-            combining: ['\0'; 3],
+            combining: ['\0'; COMBINING_CAPACITY],
             combining_len: 0,
             width: 1,
             // Erasing paints the current background but never the current
@@ -146,7 +186,7 @@ impl Cell {
     fn spacer(pen: Pen) -> Self {
         Self {
             character: ' ',
-            combining: ['\0'; 3],
+            combining: ['\0'; COMBINING_CAPACITY],
             combining_len: 0,
             width: 0,
             foreground: pen.foreground,
@@ -545,6 +585,10 @@ impl Grid {
         autowrap: bool,
         insert: bool,
     ) {
+        if let Some((column, width)) = self.join_target(character, autowrap) {
+            self.join(column, width, character, pen, autowrap, insert);
+            return;
+        }
         let width = UnicodeWidthChar::width(character)
             .unwrap_or(0)
             .min(self.columns);
@@ -597,7 +641,7 @@ impl Grid {
         }
         self.lines[row][column] = Cell {
             character,
-            combining: ['\0'; 3],
+            combining: ['\0'; COMBINING_CAPACITY],
             combining_len: 0,
             width: width as u8,
             foreground: pen.foreground,
@@ -609,6 +653,140 @@ impl Grid {
         }
         let advanced = column + width;
         if rewriting {
+            if advanced == self.columns {
+                self.clear_row_wraps(row);
+            } else {
+                self.rewrite = Some((id, advanced));
+            }
+        }
+        if advanced >= self.columns {
+            self.cursor.column = self.columns - 1;
+            self.cursor.pending_wrap = autowrap;
+        } else {
+            self.cursor.column = advanced;
+            self.cursor.pending_wrap = false;
+        }
+    }
+
+    /// Whether printing completes a row, including a cluster that only
+    /// becomes wide when its presentation selector arrives.
+    pub(super) fn wraps_on_print(&self, character: char, autowrap: bool) -> bool {
+        if !autowrap {
+            return false;
+        }
+        if let Some((column, width)) = self.join_target(character, autowrap) {
+            return column + usize::from(width) > self.columns;
+        }
+        let width = character.width().unwrap_or(0).min(self.columns);
+        width > 0 && (self.cursor.pending_wrap || self.cursor.column + width > self.columns)
+    }
+
+    /// The cell before the cursor that `character` continues, and the width
+    /// the joined cluster takes. Frontends measure its display text, so a
+    /// widening join must also update its spacer, cursor, and row placement.
+    /// Unsupported widths fall back to the ordinary single-character rules.
+    fn join_target(&self, character: char, autowrap: bool) -> Option<(usize, u8)> {
+        // Nothing printable joins an ASCII character to what precedes it.
+        if character.is_ascii() {
+            return None;
+        }
+        let row = self.cursor.row;
+        let mut column = if self.cursor.pending_wrap {
+            self.columns.saturating_sub(1)
+        } else {
+            self.cursor.column.checked_sub(1)?
+        };
+        if self.lines[row][column].width == 0 && column > 0 {
+            column -= 1;
+        }
+        let cell = self.lines[row][column];
+        if cell.width == 0
+            || (cell.character == ' ' && cell.combining_len == 0)
+            || usize::from(cell.combining_len) >= COMBINING_CAPACITY
+        {
+            return None;
+        }
+        let mut cluster = cell.text();
+        // What follows a joiner is joined before the stream has said whether
+        // a presentation selector comes next, so it keeps the cell's width
+        // even while the sequence so far measures otherwise; see
+        // [`Cell::display_text`].
+        let after_joiner = cluster.ends_with('\u{200D}');
+        if !crate::grapheme::extends(&mut cluster, character) {
+            return None;
+        }
+        let width = crate::grapheme::width(&cluster).max(1);
+        if width == usize::from(cell.width) || (after_joiner && cell.width == 2) {
+            return Some((column, cell.width));
+        }
+        // A child may disable wrapping between a base at the margin and its
+        // selector. Keep the text but clip its presentation instead of
+        // wrapping against the child's current mode.
+        if !autowrap && column + width > self.columns {
+            return Some((column, cell.width));
+        }
+        // A presentation selector can turn a one-cell symbol into a two-cell
+        // emoji. At the right margin the whole cluster moves to the next
+        // row, just as if its full width had been known on the first print.
+        // A one-column terminal cannot represent a wide cluster.
+        (width == 2
+            && cell.width == 1
+            && self.columns >= 2
+            && (self.cursor.pending_wrap || self.cursor.column == column + 1))
+            .then_some((column, 2))
+    }
+
+    fn join(
+        &mut self,
+        mut column: usize,
+        width: u8,
+        character: char,
+        pen: Pen,
+        autowrap: bool,
+        insert: bool,
+    ) {
+        let mut row = self.cursor.row;
+        let mut cell = self.lines[row][column];
+        cell.combining[usize::from(cell.combining_len)] = character;
+        cell.combining_len += 1;
+        if width == cell.width {
+            self.lines[row][column] = cell;
+            return;
+        }
+        let id = self.line_ids[row].id;
+        let rewriting = self.rewrite == Some((id, column + 1));
+        let wrapped = column + usize::from(width) > self.columns;
+        if wrapped {
+            // Retire the provisional narrow cell before scrolling: the old
+            // row may move into history or out of a scrolling region.
+            self.lines[row][column] = Cell::blank(pen);
+            self.cursor.column = 0;
+            self.index(pen);
+            row = self.cursor.row;
+            self.line_ids[row].continuation = Some((id, column));
+            column = 0;
+            self.rewrite = None;
+        }
+        if insert {
+            // The base already inserted one column on its original row.
+            // Widening needs only the extra column, or both after wrapping.
+            let continuation = self.line_ids[row].continuation;
+            self.insert_characters(if wrapped { 2 } else { 1 }, pen);
+            self.line_ids[row].continuation = continuation;
+        }
+        cell.width = width;
+        if wrapped {
+            self.clear_partner(row, column, pen);
+        }
+        self.clear_partner(row, column + 1, pen);
+        self.lines[row][column] = cell;
+        self.lines[row][column + 1] = Cell::spacer(Pen {
+            foreground: cell.foreground,
+            background: cell.background,
+            attributes: cell.attributes,
+        });
+        let advanced = column + 2;
+        if rewriting && !wrapped {
             if advanced == self.columns {
                 self.clear_row_wraps(row);
             } else {
@@ -1360,5 +1538,106 @@ mod tests {
         assert_eq!(grid.scrollback_len(), 0);
         assert_eq!(row_text(&grid, 0), "two");
         assert_eq!(row_text(&grid, 1), "three");
+    }
+
+    /// Every drawn cell is as wide as its text measures, which is how both
+    /// frontends place it; a mismatch shifts the rest of the row.
+    fn assert_cells_match_their_text(grid: &Grid) {
+        for (column, cell) in grid.lines[0].iter().enumerate() {
+            if cell.width != 0 {
+                assert_eq!(
+                    usize::from(cell.width),
+                    crate::grapheme::width(&cell.display_text()),
+                    "cell {column} holds {:?}",
+                    cell.text()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn emoji_sequences_join_one_cell_and_advance_by_their_drawn_width() {
+        for (emoji, length) in [("🤷‍♀️", 4), ("👍🏽", 2), ("🇵🇱", 2), ("❤️", 2), ("😀", 1)]
+        {
+            let mut grid = Grid::new(6, 1, false);
+            write(&mut grid, emoji);
+            write(&mut grid, "x");
+            let cell = grid.lines[0][0];
+            assert_eq!(cell.text(), emoji, "{emoji} split across cells");
+            assert_eq!(1 + usize::from(cell.combining_len), length);
+            assert_eq!(cell.width, 2, "{emoji}");
+            assert_eq!(grid.lines[0][1].width, 0, "{emoji} has a spacer");
+            assert_eq!(grid.lines[0][2].character, 'x', "{emoji}");
+            assert_eq!(grid.cursor.column, 3, "{emoji}");
+            assert_cells_match_their_text(&grid);
+        }
+    }
+
+    #[test]
+    fn sequences_that_measure_otherwise_draw_a_form_that_fits_their_cell() {
+        // Without its presentation selector this sequence measures three
+        // cells; it is kept whole and drawn in emoji presentation.
+        let mut grid = Grid::new(6, 1, false);
+        write(&mut grid, "🤷\u{200D}♂x");
+        assert_eq!(grid.lines[0][0].text(), "🤷\u{200D}♂");
+        assert_eq!(grid.lines[0][0].display_text(), "🤷\u{200D}♂\u{FE0F}");
+        assert_eq!(grid.lines[0][2].character, 'x');
+        assert_eq!(
+            grid.plain_text(),
+            "🤷\u{200D}♂x\n",
+            "copying keeps the source text"
+        );
+        assert_cells_match_their_text(&grid);
+
+        // A one-column screen cannot represent an emoji's two cells.
+        let mut grid = Grid::new(1, 1, false);
+        write(&mut grid, "❤\u{FE0F}");
+        assert_eq!(grid.lines[0][0].width, 1);
+        assert_eq!(grid.lines[0][0].text(), "❤\u{FE0F}");
+        assert_eq!(grid.lines[0][0].display_text(), "❤");
+        assert_cells_match_their_text(&grid);
+    }
+
+    #[test]
+    fn a_halfwidth_sound_mark_widens_its_kana_to_the_cells_it_is_drawn_in() {
+        let mut grid = Grid::new(6, 1, false);
+        write(&mut grid, "ｶﾞx");
+        assert_eq!(grid.lines[0][0].text(), "ｶﾞ");
+        assert_eq!(grid.lines[0][0].width, 2);
+        assert_eq!(grid.lines[0][2].character, 'x');
+        assert_cells_match_their_text(&grid);
+    }
+
+    #[test]
+    fn the_longest_standard_emoji_fit_one_cell() {
+        for emoji in [
+            "👨\u{200D}👩\u{200D}👧\u{200D}👦",
+            "👩🏻\u{200D}❤\u{FE0F}\u{200D}💋\u{200D}👨🏼",
+            "🏃🏽\u{200D}♀\u{FE0F}\u{200D}➡\u{FE0F}",
+            "🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}",
+        ] {
+            let mut grid = Grid::new(6, 1, false);
+            write(&mut grid, emoji);
+            write(&mut grid, "x");
+            assert_eq!(grid.lines[0][0].text(), emoji);
+            assert_eq!(grid.lines[0][0].width, 2, "{emoji}");
+            assert_eq!(grid.lines[0][2].character, 'x', "{emoji}");
+            assert_cells_match_their_text(&grid);
+        }
+    }
+
+    #[test]
+    fn a_full_cell_leaves_further_code_points_to_the_ordinary_rules() {
+        let mut grid = Grid::new(4, 1, false);
+        write(
+            &mut grid,
+            &format!("e{}", "\u{301}".repeat(COMBINING_CAPACITY + 2)),
+        );
+        assert_eq!(
+            usize::from(grid.lines[0][0].combining_len),
+            COMBINING_CAPACITY
+        );
+        assert_eq!(grid.cursor.column, 1);
+        assert_cells_match_their_text(&grid);
     }
 }

@@ -5934,7 +5934,7 @@ impl App {
             self.action_failed("this row is not a file");
             return Ok(());
         };
-        self.open_file(repository.workdir().join(entry.path))
+        self.open_document(repository.workdir().join(entry.path))
     }
 
     /// Stages or unstages every file the selection covers.

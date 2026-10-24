@@ -4,6 +4,29 @@ This document records external material incorporated into Runyte, along with
 any asset whose provenance or distribution status should remain visible. It
 supplements, but does not replace, the root `LICENSE`.
 
+## Desktop edition compatibility patches
+
+This section applies only to the desktop edition.
+
+`vendor/proc-macro-error2` contains version 2.0.1 under MIT OR Apache-2.0,
+with both upstream license texts. `vendor/block` contains version 0.1.6 by
+Steven Sheldon, declared MIT in its upstream package manifest; that release
+does not ship a separate license file. Each directory's `RUNYTE-PATCH.md`
+records its source and the local Rust compatibility corrections. These
+dependencies are used only by the desktop edition’s GPUI frontend.
+
+`vendor/gpui` contains GPUI 0.2.2 by Zed Industries, Inc. under Apache-2.0,
+with its upstream `LICENSE-APACHE`. Its `RUNYTE-PATCH.md` lists the removed
+example programs and the modified files, which carry a modification notice.
+The changes schedule Linux frames on demand. The vendored files keep their
+Apache-2.0 license and are not relicensed under Runyte's MPL-2.0.
+
+`vendor/stylo_derive` retains Stylo's MPL-2.0 source headers and metadata from
+crates.io version 0.22.0 (<https://github.com/servo/stylo>). Four generated
+successful formatting results explicitly name `std::fmt::Error` so Stylo can
+compile alongside GPUI's structured logging dependencies. Provenance and removal
+conditions are in `vendor/stylo_derive/RUNYTE-PATCH.md`.
+
 ## Built-in color themes
 
 Runyte incorporates palette values from the projects below into the built-in
@@ -333,3 +356,69 @@ The assets are the project owner's own work and are covered by the root
 artwork and have not been given textual SPDX headers.
 
 This entry supersedes the AI-generated `logo/R.png` that these files replaced.
+
+## Desktop edition frontend dependencies
+
+This section applies only to the desktop edition. It links GPUI 0.2.2, Zed Industries' Rust UI
+framework, under Apache-2.0. Source: <https://github.com/zed-industries/zed>;
+published crate: <https://crates.io/crates/gpui/0.2.2>. A locally patched copy
+is built from `vendor/gpui` (see above). The adapter is Runyte-authored and does
+not incorporate Zed editor code or its widget library.
+
+Image decoding uses the `image` crate (MIT OR Apache-2.0); temporary PDF
+raster storage uses `tempfile` (MIT OR Apache-2.0); frontend wakeups use
+`async-channel` (MIT OR Apache-2.0). Resolved transitive versions are recorded
+in `Cargo.lock`. Upstream license notices accompany their crate distributions.
+
+The Linux window-icon adapter uses `x11rb` (MIT OR Apache-2.0) for bounded
+X11 property reads and the `_NET_WM_ICON` property. Its artwork derives from
+the repository's Runyte logo, without incorporating third-party icon artwork.
+
+PDF rendering defaults to Hayro, hayro-interpret and hayro-syntax 0.8.0
+(Apache-2.0 OR MIT), with the permissively licensed Vello CPU renderer and
+Hayro image/color/CMap dependencies recorded in `Cargo.lock`.
+Source: <https://github.com/LaurenzV/hayro>, revision
+`ea9c81dc70cde40c64205986fdcfcd481fe934d8`. Retained notices in
+`licenses/hayro/` include Hayro's MIT license; its upstream NOTICE with Apache
+2.0 terms for adaptations from PDFBox, pdf.js and the png crate; PDFium/Foxit
+BSD terms for embedded standard-font substitutes; Adobe BSD terms for embedded
+CMaps; and CC0 terms for the CGATS color profile. These are unmodified upstream
+assets included through the pinned crate distributions.
+
+Fallback rasterization invokes separately installed Poppler utilities through
+argument vectors. Poppler is neither linked nor bundled by Runyte.
+The two-page PDF test fixture in `crates/runyte-native/src/tests/fixtures/` is
+Runyte-authored, containing solid-color rectangles and short Helvetica text samples.
+
+The optional native frontend also uses `roxmltree` (MIT OR Apache-2.0) to read
+bounded Poppler word coordinates and `arboard` (MIT OR Apache-2.0) for native
+image clipboard ownership. GPUI 0.2.2's Linux clipboard publishes text only;
+image-region copying therefore uses arboard's Rust X11/Wayland backend.
+
+## Bundled native font
+
+Native builds embed four unmodified JetBrainsMono Nerd Font faces (Medium,
+Medium Italic, Bold, Bold Italic), from Nerd Fonts v3.4.0 / JetBrains Mono
+2.304, under SIL OFL 1.1. Copyright 2020 The JetBrains Mono Project Authors;
+Nerd Fonts copyright Ryan L McIntyre. Sources, exact hashes, and redistribution
+terms are recorded in `assets/fonts/jetbrains-mono/README.md`; retained licenses
+and glyph-set attributions are in `licenses/jetbrains-mono/`. The fonts keep
+their own license and are not relicensed under Runyte's MPL-2.0.
+
+The native build carries a compatibility-patched copy of proc-macro-error2 2.0.1
+(MIT OR Apache-2.0) under `vendor/proc-macro-error2`. See its LICENSE-MIT,
+LICENSE-APACHE and RUNYTE-PATCH.md for provenance and the single source change.
+
+
+## Desktop edition document preview helper
+
+This section applies only to the desktop edition. The `crates/runyte-preview`
+library, linked into the desktop executable and run in an isolated helper, uses
+[Blitz](https://github.com/DioxusLabs/blitz) at
+`74fe1abf090732524c86d96e6cdb6f95d8f8d6dc` (MIT OR Apache-2.0),
+AnyRender/Vello CPU, Pulldown-cmark (MIT), Syntect (MIT), and their locked
+transitive dependencies. Blitz integrates Stylo (MPL-2.0), Taffy, Parley and
+usvg. Their upstream license terms remain applicable when distributing the
+desktop edition. The engine shares the workspace `Cargo.lock` and is not linked
+into the terminal edition. Its `preview.css` is original Runyte MPL-2.0 code; no GitHub CSS
+has been copied.

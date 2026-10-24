@@ -8,6 +8,7 @@
 pub mod about;
 pub mod app;
 pub mod buffer;
+pub mod cli;
 pub mod clipboard;
 pub mod command;
 pub mod config;
@@ -26,6 +27,7 @@ pub mod finder;
 pub mod fs_plan;
 pub mod git;
 pub mod git_monitor;
+pub mod grapheme;
 pub mod hash;
 pub mod headless;
 pub mod help;
@@ -47,6 +49,7 @@ pub mod manual;
 pub mod markdown;
 #[cfg(any(unix, windows))]
 pub mod mcp;
+pub mod media;
 pub(crate) mod merge_review_layout;
 #[cfg(any(unix, windows))]
 mod native_path;
@@ -97,3 +100,8 @@ pub mod wrap;
 
 /// Experimental extension wire contract and process service.
 pub mod plugin;
+
+pub mod document_preview;
+
+/// The editor release shared by all bundled executables and protocols.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

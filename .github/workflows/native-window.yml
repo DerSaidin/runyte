@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: MPL-2.0
+
+name: Desktop edition
+
+on:
+  push:
+    branches: [exp, dev, main]
+  pull_request:
+    branches: [exp, dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-window-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      TMPDIR: ${{ matrix.os == 'macos-15' && '/private/tmp' || '/tmp' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake clang \
+            libfontconfig1-dev libfreetype6-dev libxcb1-dev libx11-xcb-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libssl-dev \
+            libvulkan1 mesa-vulkan-drivers poppler-utils xvfb libxtst6
+          # Mesa packages use either lvp_icd.json or lvp_icd.<arch>.json.
+          # Select the installed software driver, and fail here if it is missing.
+          lvp_icds=(/usr/share/vulkan/icd.d/lvp*.json)
+          test "${#lvp_icds[@]}" -eq 1
+          test -f "${lvp_icds[0]}"
+          printf 'VK_DRIVER_FILES=%s\n' "${lvp_icds[0]}" >> "$GITHUB_ENV"
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          xcodebuild -version
+          brew install cmake pkgconf poppler
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: native-window
+      - name: Format and lint
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked -p runyte-native -p runyte-desktop -p runyte-preview --all-targets -- -D warnings
+          cargo clippy --locked -p runyte-desktop --features app-launcher --all-targets -- -D warnings
+      - name: Core and adapter tests
+        run: |
+          python3 -m unittest discover -s contrib/packaging -p 'test_*.py'
+          cargo test --locked -p runyte-native -p runyte-desktop -p runyte-preview
+          cargo test --locked -p runyte-desktop --features app-launcher --bin runyte-app-launcher
+          cargo test --locked -p runyte-native --lib media::tests::pdf_rasterizes_distinct_pages_and_reports_total_count -- --ignored --exact | tee "$RUNNER_TEMP/pdf-test.log"
+          grep -Eq "test result: ok\. 1 passed;" "$RUNNER_TEMP/pdf-test.log"
+          cargo test --locked -p runyte-native --lib media::tests::mixed_pdf_backends_align_cropped_rotated_text_and_detail -- --ignored --exact | tee "$RUNNER_TEMP/pdf-test.log"
+          grep -Eq "test result: ok\. 1 passed;" "$RUNNER_TEMP/pdf-test.log"
+      - name: Install desktop coverage tool
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2.87.1
+        with:
+          tool: cargo-llvm-cov@0.9.0
+          fallback: none
+      - name: Measure desktop coverage
+        if: runner.os == 'Linux'
+        run: |
+          cargo llvm-cov --locked --package runyte-native --package runyte-desktop --package runyte-preview \
+            --ignore-filename-regex "$GITHUB_WORKSPACE/src/" --summary-only --fail-under-lines 40
+      - name: Build native binary
+        shell: bash
+        run: |
+          cargo build --locked -p runyte-desktop --future-incompat-report 2>&1 | tee "$RUNNER_TEMP/native-build.log"
+          python3 - "$RUNNER_TEMP/native-build.log" <<'PY'
+          import pathlib, sys
+          report = pathlib.Path(sys.argv[1]).read_text()
+          if "0 dependencies had future-incompatible warnings" not in report:
+              sys.exit("Native dependencies must have no future-incompatibility warnings")
+          PY
+      - name: Package Linux desktop and accept bundled preview
+        if: runner.os == 'Linux'
+        run: |
+          python3 contrib/packaging/package.py linux --binary target/debug/runyte-desktop \
+            --output "$RUNNER_TEMP/runyte-desktop"
+          xvfb-run -a -s '-screen 0 3200x1800x24' python3 contrib/packaging/check_package.py \
+            "$RUNNER_TEMP/runyte-desktop" --window
+      - name: Bundled PDF helper without Poppler
+        run: python3 tests/native_pdf.py --binary target/debug/runyte-desktop
+      - name: macOS block ABI compatibility
+        if: runner.os == 'macOS'
+        run: |
+          rustc --crate-name block --crate-type rlib -D warnings vendor/block/src/lib.rs --out-dir "$RUNNER_TEMP"
+          rustc --edition=2021 --test -D warnings tests/native/block_compat.rs \
+            --extern block="$RUNNER_TEMP/libblock.rlib" -o "$RUNNER_TEMP/block-compat"
+          "$RUNNER_TEMP/block-compat"
+      - name: Linux window acceptance with bundled fonts
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a -s '-screen 0 1280x900x24' python3 tests/native_window.py --binary target/debug/runyte-desktop --no-system-fonts
+          xvfb-run -a -s '-screen 0 1280x900x24' python3 tests/native_window.py --binary target/debug/runyte-desktop --no-system-fonts --mux
+          xvfb-run -a -s '-screen 0 1280x900x24' python3 tests/native_window.py --binary target/debug/runyte-desktop --latency --max-idle-wakeups 30
+          xvfb-run -a -s '-screen 0 1280x960x24' python3 tests/native_window.py --binary target/debug/runyte-desktop --animations
+      - name: Linux font and clipboard acceptance
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a -s '-screen 0 1280x960x24' python3 tests/native_window.py --binary target/debug/runyte-desktop --window-controls
+          xvfb-run -a -s '-screen 0 1280x960x24' python3 tests/native_window.py --binary target/debug/runyte-desktop --window-controls --mux
+      - name: Construct universal macOS app bundle
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked -p runyte-desktop --features app-launcher --bins --target "$target"
+          done
+          mkdir "$RUNNER_TEMP/universal"
+          for binary in runyte-desktop runyte-app-launcher; do
+            lipo -create "target/aarch64-apple-darwin/debug/$binary" \
+              "target/x86_64-apple-darwin/debug/$binary" -output "$RUNNER_TEMP/universal/$binary"
+          done
+          python3 contrib/packaging/package.py macos --binary "$RUNNER_TEMP/universal/runyte-desktop" \
+            --launcher "$RUNNER_TEMP/universal/runyte-app-launcher" --output "$RUNNER_TEMP/Runyte.app"
+          python3 contrib/packaging/check_package.py "$RUNNER_TEMP/Runyte.app"
+          python3 contrib/packaging/package.py dmg --app "$RUNNER_TEMP/Runyte.app" --output "$RUNNER_TEMP/Runyte-unsigned.dmg"
+          python3 contrib/packaging/check_dmg.py "$RUNNER_TEMP/Runyte-unsigned.dmg"

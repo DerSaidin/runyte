@@ -1370,17 +1370,23 @@ impl App {
         self.close_file_picker();
         match target {
             FinderTarget::File(target) => {
+                let was_showing = self.active().buffer;
                 if let Err(error) = self.open_file(target.path.clone()) {
                     self.action_failed(error.to_string());
                 } else {
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
             }
             FinderTarget::Resource(ResourceTarget::Buffer(buffer)) => {
                 if buffer >= self.buffers.len() || self.closed_buffers.contains(&buffer) {
                     self.action_failed("that buffer is no longer open");
                 } else {
+                    // An open document is listed as its buffer rather than
+                    // its file, but choosing it is still opening it by name.
+                    // Its page has a row of its own for asking for the page.
+                    let was_showing = self.active().buffer;
                     self.switch_buffer(buffer);
+                    self.resume_markdown_page(was_showing);
                 }
             }
             FinderTarget::Resource(ResourceTarget::BufferLocation {

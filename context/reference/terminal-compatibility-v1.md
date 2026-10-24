@@ -141,19 +141,57 @@ duplication, and writer startup, with output queued before cleanup.
 
 Deliberate limits:
 
-- Windows Phase 1 provides provisional standalone ConPTY support on x86-64
-  Windows 11 24H2 or later with Windows Terminal; see the native limits below.
+- Windows uses ConPTY on x86-64 Windows 11 24H2 or later with Windows Terminal,
+  including persistent sessions; see the native limits below.
 - Kitty graphics, sixel, iTerm images, and resize reflow are unsupported.
 - Read-only OSC 10/11 default-colour queries are supported. Colour setters,
   palette queries, and OSC 52 are ignored.
 - Only SGR (`DECSET 1006`) mouse reports are forwarded; pane borders remain
-  editor-owned.
-- A cell retains at most three zero-width combining marks.
+  editor-owned. Alt-left-press inside a pane starts editor-owned pane dragging
+  and is not forwarded to the child; its drag and release remain editor-owned.
+- A cell holds one user-perceived character: a code point that continues the
+  cluster before the cursor, such as a combining mark, variation selector,
+  skin tone, regional indicator or the parts of a joined emoji, joins that
+  cell instead of taking a column. A selector that makes a one-cell symbol an
+  emoji widens it, inserting the extra column in insert mode or replacing
+  the neighboring cell otherwise. At the right margin, autowrap moves the
+  whole cluster to the next row and records the vacated column as wrap
+  padding. One-column screens retain the source text but may display only the
+  base character. Disabling autowrap between the base and its selector also
+  keeps that narrow presentation at the margin rather than wrapping. A cell
+  retains at most ten code points after its first, enough for every standard
+  emoji sequence; later ones fall back to ordinary placement.
+  Each cell is drawn with text that measures its own width, so a sequence
+  written without its presentation selectors, such as `🤷‍♂`, is drawn in emoji
+  presentation and copied exactly as written.
+  Known limitation: if autowrap was already disabled when the base was
+  printed in the final column, a following selector can attach to the
+  preceding cell.
+- A cursor on either cell of a wide glyph highlights the whole glyph. Child
+  cursor movements and erase counts remain cell-based: they are not rewritten
+  as grapheme editing commands. Shells and line editors that sum individual
+  code-point widths can disagree with the two-cell display of `😶‍🌫️`, and can
+  delete only part of the sequence. That child-side editing limitation is not
+  a loss of UTF-8 or a font failure in Runyte.
 - Integrated sessions survive only their workspace-host process. They do not
   survive a force stop, host crash/replacement, logout, reboot, or machine
   failure.
 
+Emoji regressions in `tests/terminal_sequences.rs` cover `😃` and `😶‍🌫️`,
+fragmented UTF-8, addressed redraw and erase, captured shell output, insert
+mode, widening at the margin, scrolling, and completed-line accounting.
+`terminal_cursor_on_either_half_of_an_emoji_highlights_the_whole_glyph` in
+`src/ui.rs` checks the composed cell buffer used by both frontends.
+`emoji_widening_at_the_margin_preserves_wrapped_link_provenance` in
+`src/terminal/tests/navigation.rs` checks review navigation across the wrap.
+
 ## Wrapped web links in review
+
+Native Ctrl-left-click (Cmd-left-click on macOS) uses the same inference at the
+clicked terminal cell. A live terminal is read through a temporary snapshot;
+its mode, scroll and review state remain unchanged. An existing review supplies
+its frozen text instead. The gesture's press, drag and release are editor-owned
+even when the child has enabled SGR mouse reporting.
 
 Automatic wraps retain the preceding row's identity and occupied column count
 through scrollback. Frozen review captures that provenance, letting `gf` infer a
@@ -333,3 +371,9 @@ wakes blocked output producers before requesting process termination. Job
 assignment happens while the child is suspended and precedes its first run.
 Windows host/attachment parity and compatibility with the optional programs
 in the Unix matrix above are not implied by these tests.
+
+Native windows reserve Ctrl-Shift-v for one bounded literal clipboard paste;
+terminal dispatch retains bracketed-paste handling. Ctrl-Shift-c copies a
+terminal review selection through the registry, while Ctrl-c remains child
+input. Terminal Insert's copy exception and its help read the effective
+Terminal binding, including configured replacements.

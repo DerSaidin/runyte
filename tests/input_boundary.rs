@@ -14,9 +14,10 @@ fn rust_sources_below(directory: &Path, sources: &mut Vec<std::path::PathBuf>) {
 }
 
 #[test]
-fn crossterm_is_confined_to_terminal_acquisition_and_the_tui_adapter() {
+fn crossterm_is_confined_to_frontend_acquisition_and_adapters() {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let main = source_root.join("main.rs");
+    let cli = source_root.join("cli.rs");
+    let window = source_root.join("cli/window.rs");
     let adapter = source_root.join("tui/input.rs");
     let windows_adapter = source_root.join("tui/windows_input.rs");
     let windows_tests = source_root.join("tui/windows_input");
@@ -26,7 +27,8 @@ fn crossterm_is_confined_to_terminal_acquisition_and_the_tui_adapter() {
     rust_sources_below(&source_root, &mut sources);
 
     for source in sources {
-        if source == main
+        if source == cli
+            || source == window
             || source == adapter
             || source == windows_adapter
             || source == windows_console_tests

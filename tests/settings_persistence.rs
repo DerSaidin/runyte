@@ -157,3 +157,28 @@ fn terminal_theme_colors_persist_without_changing_custom_palette() {
         );
     }
 }
+
+#[test]
+fn preview_theme_colors_default_on_and_persist() {
+    assert!(
+        runyte::config::Config::default()
+            .editor
+            .preview_theme_colors
+    );
+    let source = "theme: ocean-light\n";
+    let file = ConfigFile::new(source);
+    for enabled in [false, true] {
+        let config = persist_setting(
+            &file.0,
+            SettingId::EditorPreviewThemeColors,
+            &SettingValue::Boolean(enabled),
+        )
+        .unwrap();
+        assert_eq!(config.editor.preview_theme_colors, enabled);
+        assert!(
+            file.text()
+                .contains(&format!("preview_theme_colors: {enabled}"))
+        );
+        assert_eq!(config.theme.as_deref(), Some("ocean-light"));
+    }
+}

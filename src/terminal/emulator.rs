@@ -13,7 +13,7 @@ use super::{
     grid::{Attributes, Color, Grid, Pen},
     parser::{Action, Parser, parameter, raw_parameter},
 };
-use unicode_width::UnicodeWidthChar as _;
+
 /// Modes a child switches on and off, and that key encoding has to honour.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Modes {
@@ -219,14 +219,7 @@ impl Emulator {
         }
         match action {
             Action::Print(character) => {
-                let width = character.width().unwrap_or(0).min(self.grid().columns());
-                usize::from(
-                    width > 0
-                        && self.modes.autowrap
-                        && (self.grid().cursor.pending_wrap
-                            || self.grid().cursor.column.saturating_add(width)
-                                > self.grid().columns()),
-                )
+                usize::from(self.grid().wraps_on_print(*character, self.modes.autowrap))
             }
             Action::Execute(0x0a..=0x0c) => 1,
             Action::Escape {

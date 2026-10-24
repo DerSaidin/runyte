@@ -3,9 +3,9 @@
 [![CI](https://github.com/runyte/runyte/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/runyte/runyte/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/badge/coverage-%E2%89%A589%25-brightgreen)](context/reference/test-coverage.md)
 
-https://github.com/user-attachments/assets/86edfda0-f8cb-4999-b35d-4f450f4ad3c3
+https://github.com/user-attachments/assets/5f039873-8232-4ad9-b089-0d54b2b05e85
 
-*[Watch the 40-second demo](https://runyte.com/videos/runyte-demo.mp4?v=acb069b9306f): modal editing, search, file navigation, terminals, Markdown, persistent sessions, and a four-pane workspace. Matrix → gruvbox.*
+*[Watch the 45-second demo](https://runyte.com/videos/runyte-demo.mp4?v=7b63a9df8e582e64): editing, terminals, Markdown, persistent sessions, and the desktop window with animated images, PDFs, and pane dragging.*
 
 Runyte is a fast modal text editor for focused work. Everything is accessed
 through keybindings. No need to remember them though — every keybinding sequence
@@ -38,7 +38,23 @@ several at once and keeping up with their output:
 Having all of these features in a single binary enables strong code optimization,
 consistent keybindings, consistent themes, and minimum configuration.
 
-Runyte runs on Linux, macOS, and Windows 11.
+## Editions
+
+Both editions use the same editor, keymap, configuration, plugins and persistent
+sessions. Choose the desktop edition if you want `--window`; it also runs in a
+terminal.
+
+| Edition | Includes | Platforms | Installation |
+| --- | --- | --- | --- |
+| Terminal | Editor, terminal UI, Git, language services, integrated terminals, plugins and MCP | Linux, macOS, Windows 11 | [Install script, release archive or Cargo](#installation) |
+| Desktop | Everything above, plus a window, native clipboard, image/PDF viewing and document preview | Linux and macOS | [Linux release archive or source build](INSTALLATION.md#desktop-edition) |
+
+**Both distributions provide an executable named `runyte`.** The Cargo build
+name `runyte-desktop` distinguishes the desktop executable in `target/`;
+`runyte-native` is an internal library, not another program to install.
+See [requirements and package names](INSTALLATION.md#choose-an-edition).
+
+The platform table below describes the terminal edition.
 
 | CPU    | System     | Automated tests | Prebuilt release | Hands-on use |
 |--------|------------|:---------------:|:----------------:|:------------:|
@@ -46,8 +62,10 @@ Runyte runs on Linux, macOS, and Windows 11.
 | ARM64  | Linux      | ❌ | ✅ | ❌ |
 | x86-64 | macOS      | ❌ | ✅ | ❌ |
 | ARM64  | macOS      | ✅ | ✅ | ✅ |
-| x86-64 | Windows 11 | ✅ | ✅ | ✅ |
+| x86-64 | Windows 11 | ✅ | ✅ | 🟡 |
 | ARM64  | Windows 11 | ❌ | ❌ | ❌ |
+
+🟡 Occasional hands-on testing.
 
 This project is well tested. Test coverage is about 92% of lines, and CI requires at least 89%.
 
@@ -101,7 +119,12 @@ Workspace
 +-- Other open buffers and terminals, ready to switch to
 ```
 
-Use `Ctrl-w ...` commands to manage panes.
+Use `Space w ...` or `Ctrl-w ...` commands to manage panes. Move the active
+pane to the left/bottom/top/right edge of the layout with `Ctrl-w H/J/K/L`.
+With the mouse, drag shared borders to resize panes, Alt-left-drag inside a
+pane to rearrange it, or Shift-Alt-left-drag to expand it into neighbouring
+panes. See [pane management](docs/user-guide.md#pane-keys) for details.
+
 Use `Space d t` to toggle a narrow directory tree at the left of the editor,
 or `Space d d` to reveal the active file and focus the tree. Enter opens a
 selected file directly, or asks for a numbered destination when several panes
@@ -161,11 +184,10 @@ Runyte recognizes when it is launched as `runed`, so the symbolic link
 (e.g. `ln -s /path/to/runyte runed`) alone is enough to select editor mode,
 just like `runyte --editor`.
 
-Use it wherever a program asks for an editor, and with `sudoedit` for system
-files:
+Use `runed` for standalone edits and with `sudoedit` for system files. To edit
+inside an existing persistent session, use the [`--wait` setup](#post-install-setup).
 
 ```sh
-export EDITOR=runed
 export SUDO_EDITOR=runed
 sudoedit /etc/fstab
 ```
@@ -208,99 +230,86 @@ or the [application authoring guide](docs/plugins/authoring.md).
 
 ## Installation
 
+Choose an edition above. [INSTALLATION.md](INSTALLATION.md) covers dependencies,
+platform-specific instructions, source builds, shell setup and updates.
+
 ### Easy install
 
-Install or update to the latest release on Linux or macOS:
+Install or update the **terminal edition** on Linux or macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/runyte/runyte/main/install.sh | sh
 ```
 
-The [installer](install.sh) selects the x86-64 or ARM64 archive, verifies its
-SHA-256 checksum, and installs to `~/.local/bin/runyte` without sudo. Run the
-same command again to update. Add `~/.local/bin` to your `PATH` if needed.
-Linux requires glibc 2.35 or newer; Alpine/musl is unsupported. See the
-[installation guide](docs/user-guide.md#install-and-update-with-curl) for
-requirements, script review, version selection, and custom install locations.
-
-On Windows, download the x86-64 archive from
-[GitHub Releases](https://github.com/runyte/runyte/releases), or install through cargo.
+The script verifies the release checksum and installs `runyte` and `runed` in
+`~/.local/bin`, without sudo. Add that directory to `PATH` if needed. Linux
+archives require glibc 2.35 or newer. For Windows, use the x86-64 ZIP from
+[GitHub Releases](https://github.com/runyte/runyte/releases) and follow the
+[Windows instructions](INSTALLATION.md#windows).
 
 ### Install through cargo
 
-Installing from crates.io requires Rust 1.88 or newer and a C compiler:
+Install the **terminal edition** with Rust 1.88 or newer and a C compiler:
 
 ```sh
 cargo install runyte --locked
 ```
 
-### Build from source
+### Desktop edition
 
-To build from a clone:
+Download the Linux **desktop** archive for your CPU from
+[GitHub Releases](https://github.com/runyte/runyte/releases), then follow the
+[desktop installation steps](INSTALLATION.md#desktop-edition). Linux desktop
+archives require glibc 2.39 or newer and a working Vulkan driver. macOS desktop
+builds are available as unsigned bundles built from source.
+
+The desktop executable supports both frontends:
 
 ```sh
-cargo build --release
-./target/release/runyte README.md
+runyte --window --mux  # window with a persistent session
+runyte --mux           # terminal frontend, same persistent sessions
 ```
+
+### Build from source
+
+After installing the [build dependencies](INSTALLATION.md#build-from-source),
+choose the executable to build:
+
+```sh
+cargo build --release --locked                    # target/release/runyte
+cargo build --release --locked -p runyte-desktop  # target/release/runyte-desktop
+```
+
+Building does not install either executable. The [source installation
+steps](INSTALLATION.md#install-a-source-build) explain how to install the desktop
+build as `runyte`.
 
 ### Post-install setup
 
-Git features require `git` on `PATH`; language servers are installed separately.
+For Git and external-editor requests from Codex or Claude Code, set both
+variables in `~/.bashrc` or `~/.zshrc`:
 
-The [shell directory guide](docs/user-guide.md#change-the-shell-directory-on-exit)
-explains how `:quit-here` and both wrappers work.
-
-#### Linux and macOS
-
-On Linux and macOS, it is advised to set the following in your `~/.bashrc` or `~/.zshrc`:
 ```sh
-# To run it using ru instead of runyte ;)
-alias ru=runyte
-
-# To use runyte as the default editor, e.g. in git, Claude Code, Codex
 export EDITOR='runyte --wait'
 export VISUAL='runyte --wait'
-
-# To support :quit-here - quit to the directory selected in the file explorer
-function runyte() {
-    local runyte_tmp runyte_cwd runyte_exit
-    runyte_tmp="$(mktemp -t 'runyte-cwd.XXXXXX')" || return
-    command runyte --cwd-file "$runyte_tmp" "$@"
-    runyte_exit=$?
-    if [ "$runyte_exit" -eq 0 ] && IFS= read -r -d '' runyte_cwd < "$runyte_tmp"; then
-        [ -n "$runyte_cwd" ] && [ "$runyte_cwd" != "$PWD" ] && [ -d "$runyte_cwd" ] && builtin cd -- "$runyte_cwd"
-    fi
-    command rm -f -- "$runyte_tmp"
-    return "$runyte_exit"
-}
 ```
 
-Linux clipboard integration uses the first available of `wl-clipboard`, `xclip`,
-or `xsel`.
-
-#### Windows
-
-On Windows, in PowerShell, add `Set-Alias ru runyte` to your
-[`$PROFILE`](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_profiles)
-and start a new PowerShell session. To use `:quit-here` on Windows,
-save [runyte.ps1](contrib/runyte.ps1) in a stable local location and dot-source it from your PowerShell profile:
-```powershell
-. 'C:\Tools\Runyte\runyte.ps1'
-```
-The wrapper is tested with Windows PowerShell 5.1; PowerShell 7 has not been validated.
+Start `runyte --mux` (or `runyte --window --mux`) in your project, then run the
+agent in an integrated terminal. Its `Ctrl-g` edit opens in the parent
+persistent session; `:wbc` saves and closes the buffer so the agent resumes.
+Every client and host must use the same Runyte version. See [shell setup and
+source-build paths](INSTALLATION.md#shell-and-external-editor-setup) for details,
+Windows settings and optional `:quit-here` integration.
 
 ### First run
 
 ```sh
-runyte
-runyte .
-runyte src/main.rs
-runyte +120:8 src/app.rs
-runyte -a
-runyte -a /path/to/notes
+runyte --editor notes.md  # edit anywhere, without a workspace
+runyte --mux              # open a persistent session in a project
 ```
 
-Run `runyte --help` for the complete command-line interface.
+A workspace is a Git repository or a directory initialized with
+`runyte --init DIRECTORY`. Use `runyte --help` for all command-line options.
 
 ## Help
 

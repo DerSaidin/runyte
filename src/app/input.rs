@@ -11,13 +11,13 @@ use super::{
     CommandArguments, CommandAvailability, CommandExecutionContext, CommandId, CommandInvocation,
     CommandMatch, CommandOutcome, CommandOutcomeHint, CommandRefusal, CommandState,
     CommandUnavailable, CompletionSource, ContentAlignment, DEFAULT_MACRO_REGISTER,
-    DeletionAuthorization, DeletionMode, DelimiterPair, DiffScope, EditorCommand, EditorIntent,
-    EntryKind, FileObservation, FilePicker, FinderTarget, FsOperation, GeneratedViewIdentity,
-    GrammarContext, GrammarNotice, GrammarOutput, HOVER_PEEK_ROWS, HashSet, HelpInvocation,
-    InputEvent, InputGrammar, Instant, InvocationParameters, KeyCode, KeySequence, KeyStroke,
-    Keymap, LineDirection, ListPicker, LspCommand, MaximizedView, Mode, Modifiers, Motion, Offset,
-    Path, PathBuf, PathHint, PickerTarget, PointerButton, PointerDrag, PointerEvent,
-    PointerEventKind, PointerOutcome, PreparedView, ProgramAction, ProgramActionMenu,
+    DeletionAuthorization, DeletionMode, DelimiterPair, DiffScope, Edge, EditorCommand,
+    EditorIntent, EntryKind, FileObservation, FilePicker, FinderTarget, FsOperation,
+    GeneratedViewIdentity, GrammarContext, GrammarNotice, GrammarOutput, HOVER_PEEK_ROWS, HashSet,
+    HelpInvocation, InputEvent, InputGrammar, Instant, InvocationParameters, KeyCode, KeySequence,
+    KeyStroke, Keymap, LineDirection, ListPicker, LspCommand, MaximizedView, Mode, Modifiers,
+    Motion, Offset, Path, PathBuf, PathHint, PickerTarget, PointerButton, PointerDrag,
+    PointerEvent, PointerEventKind, PointerOutcome, PreparedView, ProgramAction, ProgramActionMenu,
     ProgramChoice, PromptKind, Range, RangeIntent, RequestKind, Result, SearchMode, SearchQuery,
     Selection, SelectionSemantics, SettingId, SettingType, SettingValue, SignatureContext,
     StashScope, SyntaxObject, SyntaxObjectPart, SyntaxSelectionTransform, SystemClipboard,
@@ -27,8 +27,9 @@ use super::{
     is_path_token_boundary, is_terminal_normal_key, is_word, is_word_completion_character,
     keymap_for, mapped_applied_path, operative_span, persistent_session_availability, pointer_pane,
     pointer_resize_pair, prompt_backspace, prompt_delete, prompt_delete_range, prompt_insert,
-    prompt_word_backward, prompt_word_forward, quote_path_hint, rect_contains, resolve_command,
-    resolved_operation_path, row_characters, unclosed_or_complete_quoted_path,
+    prompt_left, prompt_right, prompt_word_backward, prompt_word_forward, quote_path_hint,
+    rect_contains, resolve_command, resolved_operation_path, row_characters,
+    unclosed_or_complete_quoted_path,
 };
 
 /// How soon a second left press on the same directory tree entry must follow
@@ -768,7 +769,7 @@ impl App {
         if !matches!(input, InputEvent::Pointer(_)) {
             self.prompt_input_error = None;
             self.plugins.foreground_generation += 1;
-            self.cancel_pointer_drag();
+            self.cancel_pointer_drag_preserving_pane_release();
         }
         if self.macro_replay.is_some() {
             if is_macro_replay_cancel(&input) {
@@ -922,6 +923,21 @@ impl App {
         view: &PreparedView,
         repetitions: u16,
     ) -> Result<PointerOutcome> {
+        if self.pointer_link_pressed {
+            match event.kind {
+                PointerEventKind::Up(PointerButton::Left) => {
+                    self.pointer_link_pressed = false;
+                    return Ok(PointerOutcome::Unchanged);
+                }
+                PointerEventKind::Drag(PointerButton::Left) => {
+                    return Ok(PointerOutcome::Unchanged);
+                }
+                PointerEventKind::Down(PointerButton::Left) => {
+                    self.pointer_link_pressed = false;
+                }
+                _ => {}
+            }
+        }
         if self.context_overlay_active() {
             return Ok(PointerOutcome::Unchanged);
         }
@@ -934,6 +950,12 @@ impl App {
             return Ok(PointerOutcome::Unchanged);
         }
         if self.macro_replay.is_some() {
+            return Ok(PointerOutcome::Unchanged);
+        }
+        if self.consume_cancelled_pane_pointer(event) {
+            return Ok(PointerOutcome::Unchanged);
+        }
+        if event.kind == PointerEventKind::Moved && self.pointer_pane_drag_active() {
             return Ok(PointerOutcome::Unchanged);
         }
         // Crossterm's mouse capture includes passive any-motion events. They
@@ -982,6 +1004,13 @@ impl App {
                 }
                 _ => {}
             }
+            return Ok(PointerOutcome::Changed);
+        }
+        // A captured pane drag owns its release even over the directory sidebar.
+        if matches!(self.pointer_drag, Some(PointerDrag::MovePane { .. }))
+            && self.handle_pane_drag(event, view)
+        {
+            self.invalidate_all_partial_guards();
             return Ok(PointerOutcome::Changed);
         }
         if let Some(area) = view.tree_area
@@ -1046,6 +1075,58 @@ impl App {
                     .select_relative(3 * isize::try_from(repetitions).unwrap_or(isize::MAX / 3)),
                 _ => {}
             }
+            return Ok(PointerOutcome::Changed);
+        }
+        if self.native_media
+            && event.kind == PointerEventKind::Down(PointerButton::Left)
+            && event.modifiers
+                == if cfg!(target_os = "macos") {
+                    Modifiers::SUPER
+                } else {
+                    Modifiers::CONTROL
+                }
+        {
+            self.pointer_link_pressed = true;
+            self.invalidate_all_partial_guards();
+            self.grammar.reset();
+            self.jump = None;
+            self.status_error = false;
+            // A followed link is a completed action like `gf`, so it gets its
+            // own echo identity: a browser launch that finishes later updates
+            // this click's interaction line rather than an older key's.
+            let previous_action = self.active_action_id;
+            self.active_action_id = Some(self.next_action_id);
+            self.next_action_id = self.next_action_id.wrapping_add(1).max(1);
+            let state = CommandState::capture(self);
+            let attempted = self.open_pointer_link(event, view).unwrap_or_else(|error| {
+                // Navigation can fail after moving focus; publish that state
+                // and its error just as a directory-tree double click does.
+                self.action_failed(error.to_string());
+                true
+            });
+            if attempted {
+                let outcome = state.outcome(self, CommandOutcomeHint::Infer);
+                let spelling = if cfg!(target_os = "macos") {
+                    "Cmd-left-click"
+                } else {
+                    "Ctrl-left-click"
+                };
+                self.action_feedback = None;
+                self.report_completed_action(
+                    spelling,
+                    "Open the file or web link under the pointer",
+                    outcome,
+                );
+            }
+            self.active_action_id = previous_action;
+            self.retire_detached_ephemeral_buffers();
+            self.note_destination_activation();
+            self.refresh_navigator();
+            return Ok(PointerOutcome::Changed);
+        }
+        if self.handle_pane_drag(event, view) {
+            self.invalidate_all_partial_guards();
+            self.status_error = false;
             return Ok(PointerOutcome::Changed);
         }
         let active_pane = self.active_pane;
@@ -1120,6 +1201,17 @@ impl App {
                     return Ok(PointerOutcome::Changed);
                 };
                 self.activate_pane_from_pointer(pane_id);
+                // Native preview clicks focus the pane without placing a caret
+                // in the source text hidden underneath its document surface.
+                if self.native_media
+                    && self
+                        .document_previews
+                        .get(&pane_id)
+                        .is_some_and(|preview| preview.source == self.panes[&pane_id].buffer)
+                {
+                    self.pointer_drag = None;
+                    return Ok(PointerOutcome::Changed);
+                }
                 if let Some(terminal) = self.terminal_of_pane(pane_id) {
                     // Live cells still belong to the child. Once review has
                     // captured them, however, they are an immutable
@@ -1289,21 +1381,8 @@ impl App {
                     };
                     let delta = cells.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
                     if delta != 0 {
-                        self.layout.resize_between_cells(
-                            first,
-                            second,
-                            crate::layout::Rect {
-                                x: view.geometry.editor.x
-                                    + view.tree_area.map_or(0, |tree| tree.width),
-                                width: view
-                                    .geometry
-                                    .editor
-                                    .width
-                                    .saturating_sub(view.tree_area.map_or(0, |tree| tree.width)),
-                                ..view.geometry.editor
-                            },
-                            delta,
-                        );
+                        self.layout
+                            .resize_between_cells(first, second, view.layout_area(), delta);
                     }
                     self.pointer_drag = Some(PointerDrag::Resize {
                         first,
@@ -1315,6 +1394,9 @@ impl App {
                 }
                 Some(PointerDrag::DirectoryTreeResize) => {
                     unreachable!("tree drag is handled before pane input")
+                }
+                Some(PointerDrag::MovePane { .. }) => {
+                    unreachable!("pane moves are handled before pane input")
                 }
                 None => {}
             },
@@ -1592,6 +1674,59 @@ impl App {
         }
         .min(end);
         Some(buffer.line_to_offset(document_row) + character)
+    }
+
+    /// Native link clicks use the same target resolver as `gf`, but always
+    /// infer from the clicked character rather than an existing selection.
+    /// Returns whether the click reached text a link could be read from.
+    fn open_pointer_link(&mut self, event: PointerEvent, view: &PreparedView) -> Result<bool> {
+        let Some(pane) = view
+            .panes
+            .iter()
+            .find(|pane| pane.drawable && rect_contains(pane.body, event.column, event.row))
+        else {
+            return Ok(false);
+        };
+        if self.terminal_of_pane(pane.pane_id) != pane.terminal {
+            return Ok(false);
+        }
+        if let Some(terminal) = pane.terminal {
+            let Some(session) = self.terminals.get(terminal) else {
+                return Ok(false);
+            };
+            let target = session.navigation_target_at_view_cell(
+                usize::from(pane.body.height),
+                usize::from(event.row - pane.body.y),
+                usize::from(event.column - pane.body.x),
+            );
+            let directory = session.directory().to_path_buf();
+            let reviewing = session.reviewing();
+            self.leave_directory_tree();
+            if self.active_pane != pane.pane_id {
+                self.enter_normal_mode();
+                self.activate_pane(pane.pane_id);
+                self.mode = if reviewing {
+                    Mode::Normal
+                } else {
+                    Mode::Insert
+                };
+            }
+            let result = self.open_navigation_target(target, Some(directory), true);
+            if self.active_terminal().is_none() && self.mode == Mode::Insert {
+                self.enter_normal_mode();
+            }
+            result.map(|()| true)
+        } else {
+            let Some(offset) =
+                self.pointer_text_offset(view, pane.pane_id, event.column, event.row)
+            else {
+                return Ok(false);
+            };
+            self.activate_pane_from_pointer(pane.pane_id);
+            self.active_mut()
+                .replace_selection(Selection::point(offset));
+            self.goto_file_under_cursor().map(|()| true)
+        }
     }
 
     fn forward_terminal_pointer(
@@ -1885,6 +2020,7 @@ impl App {
             && key.canonical_for_binding() != self.keymap.window_prefix()
             && !self.is_fast_pane_key(key)
             && !self.is_persistent_navigation_key(key)
+            && !self.keymap.terminal_clipboard_key(key)
         {
             return self.handle_terminal_key(id, key);
         }
@@ -2482,32 +2618,37 @@ impl App {
                     let row = self.active_buffer().offset_to_row(range.head);
                     let row_end = self.active_buffer().line_to_offset(row)
                         + self.active_buffer().line_len(row);
-                    return Range::new(range.head, (range.head + 1).min(row_end));
+                    let next = self.active_buffer().next_grapheme(range.head);
+                    return Range::new(range.head, next.min(row_end));
                 }
                 return range;
             }
+            let past = |offset: usize| {
+                if inclusive {
+                    self.active_buffer().next_grapheme(offset).min(end)
+                } else {
+                    offset
+                }
+            };
             if range.anchor <= range.head {
-                Range::new(
-                    range.anchor,
-                    range.head.saturating_add(usize::from(inclusive)).min(end),
-                )
+                Range::new(range.anchor, past(range.head))
             } else {
-                Range::new(
-                    range.anchor.saturating_add(usize::from(inclusive)).min(end),
-                    range.head,
-                )
+                Range::new(past(range.anchor), range.head)
             }
         })
     }
 
     pub(super) fn vim_half_open_to_inclusive(&self, selection: Selection) -> Selection {
+        let buffer = self.active_buffer();
         selection.transform(|range| {
             if range.is_empty() {
                 range
             } else if range.anchor < range.head {
-                Range::new(range.anchor, range.head - 1)
+                // The character that ends before `head`, whether `head` is a
+                // boundary or, from a span built per code point, inside one.
+                Range::new(range.anchor, buffer.grapheme_floor(range.head - 1))
             } else {
-                Range::new(range.anchor - 1, range.head)
+                Range::new(buffer.grapheme_floor(range.anchor - 1), range.head)
             }
         })
     }
@@ -2636,14 +2777,16 @@ impl App {
                 let buffer = self.active_buffer();
                 let selection = self.active().selection.transform(|range| {
                     let position = buffer.position_of(range.head);
+                    let line_end =
+                        buffer.line_to_offset(position.row) + buffer.line_len(position.row);
                     let head = if motion == VimMotion::Left {
                         if position.col > 0 {
-                            range.head - 1
+                            buffer.previous_grapheme(range.head)
                         } else {
                             range.head
                         }
-                    } else if position.col + 1 < buffer.line_len(position.row) {
-                        range.head + 1
+                    } else if buffer.next_grapheme(range.head) < line_end {
+                        buffer.next_grapheme(range.head)
                     } else {
                         range.head
                     };
@@ -2981,7 +3124,7 @@ impl App {
                         let selection = self.active().selection.transform(|range| {
                             let row = buffer.offset_to_row(range.head);
                             let end = buffer.line_to_offset(row) + buffer.line_len(row);
-                            Range::new(range.head, (range.head + 1).min(end))
+                            Range::new(range.head, buffer.next_grapheme(range.head).min(end))
                         });
                         self.active_mut().replace_selection(selection);
                     }
@@ -3015,7 +3158,7 @@ impl App {
             let selection = self.active().selection.transform(|range| {
                 let row = buffer.offset_to_row(range.head);
                 let end = buffer.line_to_offset(row) + buffer.line_len(row);
-                Range::new(range.head, (range.head + 1).min(end))
+                Range::new(range.head, buffer.next_grapheme(range.head).min(end))
             });
             self.active_mut().replace_selection(selection);
         }
@@ -3181,7 +3324,7 @@ impl App {
                     // resumes through the ordinary path with a clean buffer.
                     Some(path) => {
                         self.buffers[confirmation.buffer].mark_saved();
-                        self.open_file(path)?;
+                        self.open_document(path)?;
                         if let Some(entry) = confirmation.focus_entry {
                             self.focus_directory_entry(&entry);
                         }
@@ -3939,10 +4082,10 @@ impl App {
             }
             KeyCode::Tab => self.complete_selected_command(),
             KeyCode::Left => {
-                self.command_cursor = self.command_cursor.saturating_sub(1);
+                self.command_cursor = prompt_left(&self.command, self.command_cursor);
             }
             KeyCode::Right => {
-                self.command_cursor = (self.command_cursor + 1).min(self.command.chars().count());
+                self.command_cursor = prompt_right(&self.command, self.command_cursor);
             }
             KeyCode::Char(ch) => {
                 prompt_insert(&mut self.command, self.command_cursor, ch);
@@ -4007,8 +4150,9 @@ impl App {
                 let target = self.picker.as_ref().and_then(FilePicker::selected_target);
                 if let Some(target) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Vertical, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4016,8 +4160,9 @@ impl App {
                 let target = self.picker.as_ref().and_then(FilePicker::selected_target);
                 if let Some(target) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Horizontal, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4165,8 +4310,9 @@ impl App {
         }
         if let Some(target) = result? {
             self.close_file_picker();
+            let was_showing = self.active().buffer;
             self.open_file(target.path.clone())?;
-            self.select_picker_target(&target);
+            self.land_on_picker_target(&target, was_showing);
         }
         Ok(())
     }
@@ -4266,8 +4412,9 @@ impl App {
                     .and_then(|(finder, picker)| finder.selected_target(picker));
                 if let Some(FinderTarget::File(target)) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Vertical, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4279,8 +4426,9 @@ impl App {
                     .and_then(|(finder, picker)| finder.selected_target(picker));
                 if let Some(FinderTarget::File(target)) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Horizontal, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4319,6 +4467,16 @@ impl App {
         }
         self.refresh_finder_preview();
         Ok(())
+    }
+
+    /// Lands on what a picker row named: the line of a content match, or,
+    /// for a row naming only a file, the view this pane last showed it in.
+    pub(super) fn land_on_picker_target(&mut self, target: &PickerTarget, was_showing: usize) {
+        if target.row.is_some() {
+            self.select_picker_target(target);
+        } else {
+            self.resume_markdown_page(was_showing);
+        }
     }
 
     pub(super) fn select_picker_target(&mut self, target: &PickerTarget) {
@@ -4415,7 +4573,24 @@ impl App {
         {
             self.mode = mode;
         }
+        if self.handle_media_command(command) {
+            return Ok(());
+        }
         match command {
+            Command::MediaShowPage
+            | Command::MediaZoomIn
+            | Command::MediaZoomOut
+            | Command::MediaFit
+            | Command::MediaActualSize
+            | Command::MediaPanLeft
+            | Command::MediaPanRight
+            | Command::MediaMoveUp
+            | Command::MediaMoveDown
+            | Command::MediaCopySelection
+            | Command::MediaBack
+            | Command::MediaSelectAll => {
+                self.status("media commands require an image or PDF pane");
+            }
             Command::ToggleDirectoryTree
             | Command::FocusDirectoryTree
             | Command::DirectoryTreeUp
@@ -4509,6 +4684,7 @@ impl App {
                     Range::point(buffer.line_to_offset(row) + buffer.line_len(row))
                 });
                 self.active_mut().replace_selection(selection);
+                self.append_insert = None;
                 self.mode = Mode::Insert;
             }
             Command::OpenLineBelow => self.open_line(false),
@@ -4717,6 +4893,7 @@ impl App {
                     "whitespace markers disabled"
                 });
             }
+            Command::PreviewDocument => self.preview_document(),
             Command::ToggleMarkdownRender => self.toggle_markdown_render(),
             Command::ToggleZen => self.toggle_maximized(MaximizedView::Zen),
             Command::ToggleFullscreen => self.toggle_maximized(MaximizedView::Fullscreen),
@@ -4796,6 +4973,10 @@ impl App {
             Command::FocusWindowRight => self.focus_from_terminal_insert(1, 0),
             Command::NextWindow => self.next_window_from_terminal_insert(),
             Command::SwapWindow => self.swap_window(),
+            Command::MoveWindowLeft => self.move_pane_to_edge(Axis::Horizontal, Edge::Start),
+            Command::MoveWindowDown => self.move_pane_to_edge(Axis::Vertical, Edge::End),
+            Command::MoveWindowUp => self.move_pane_to_edge(Axis::Vertical, Edge::Start),
+            Command::MoveWindowRight => self.move_pane_to_edge(Axis::Horizontal, Edge::End),
             Command::CloseWindow => self.close_pane(),
             Command::OnlyWindow => self.only_window(),
             Command::EqualizeWindows => self.equalize_panes(),
@@ -5213,9 +5394,9 @@ impl App {
                 prompt_delete(&mut self.command, self.command_cursor);
                 self.command_selection = 0;
             }
-            KeyCode::Left => self.command_cursor = self.command_cursor.saturating_sub(1),
+            KeyCode::Left => self.command_cursor = prompt_left(&self.command, self.command_cursor),
             KeyCode::Right => {
-                self.command_cursor = (self.command_cursor + 1).min(self.command.chars().count());
+                self.command_cursor = prompt_right(&self.command, self.command_cursor);
             }
             KeyCode::Home => self.command_cursor = 0,
             KeyCode::End => self.command_cursor = self.command.chars().count(),
@@ -5401,9 +5582,11 @@ impl App {
         match key.code {
             KeyCode::Char('c') => self.close_prompt(),
             KeyCode::Char('s') => return self.save(None, false),
-            KeyCode::Char('b') => self.command_cursor = self.command_cursor.saturating_sub(1),
+            KeyCode::Char('b') => {
+                self.command_cursor = prompt_left(&self.command, self.command_cursor);
+            }
             KeyCode::Char('f') => {
-                self.command_cursor = (self.command_cursor + 1).min(self.command.chars().count());
+                self.command_cursor = prompt_right(&self.command, self.command_cursor);
             }
             KeyCode::Char('a') => self.command_cursor = 0,
             KeyCode::Char('e') => self.command_cursor = self.command.chars().count(),
@@ -5518,6 +5701,11 @@ impl App {
         if matches!(mode, Mode::Insert | Mode::Replace) {
             let buffer = &self.buffers[buffer_id];
             let vim = self.grammar.kind() == crate::command::GrammarKind::Vim;
+            let append = mode == Mode::Insert
+                && self
+                    .append_insert
+                    .as_ref()
+                    .is_some_and(|append| append.buffer == buffer_id);
             selection.transform(|range| {
                 let mut head = range.head;
                 if vim {
@@ -5525,6 +5713,13 @@ impl App {
                     let start = buffer.line_to_offset(row);
                     if head > start {
                         head -= 1;
+                    }
+                } else if append {
+                    // The caret never steps back across the row start, so an
+                    // append that ended on a fresh line stays on that line.
+                    let row = buffer.offset_to_row(head);
+                    if head > buffer.line_to_offset(row) {
+                        head = buffer.previous_grapheme(head);
                     }
                 }
                 Range::point(buffer.clamp_offset(head, false))
@@ -5555,6 +5750,7 @@ impl App {
         );
         self.active_mut().replace_selection(selection);
         self.replace_session = None;
+        self.append_insert = None;
         self.mode = Mode::Normal;
         match self.grammar.kind() {
             crate::command::GrammarKind::Runyte => self
@@ -5575,14 +5771,64 @@ impl App {
             if after {
                 let row = buffer.offset_to_row(range.to());
                 let row_end = buffer.line_to_offset(row) + buffer.line_len(row);
-                Range::point((range.to() + 1).min(row_end))
+                Range::point(buffer.next_grapheme(range.to()).min(row_end))
             } else {
                 Range::point(range.from())
             }
         });
         self.active_mut().replace_selection(selection);
         self.buffers[buffer_id].begin_undo_group();
+        self.append_insert = after.then(|| super::AppendInsert {
+            pane: self.active_pane,
+            buffer: buffer_id,
+            revision: self.buffers[buffer_id].revision(),
+            carets: self.active().selection.clone(),
+        });
         self.mode = Mode::Insert;
+    }
+
+    /// Ends the append record when anything but its own edits moved the
+    /// carets since it was last brought up to date, or Insert mode was left
+    /// without Escape. Runs before every outer action.
+    pub(super) fn check_append_insert(&mut self) {
+        let Some(append) = &self.append_insert else {
+            return;
+        };
+        if self.mode != Mode::Insert
+            || append.pane != self.active_pane
+            || append.buffer != self.active().buffer
+            || append.carets != self.active().selection
+        {
+            self.append_insert = None;
+        }
+    }
+
+    /// Brings the append record up to date after an outer action that edited
+    /// its buffer, so the carets that edit left behind are the ones Escape
+    /// steps back from.
+    pub(super) fn follow_append_insert(&mut self) {
+        if let Some(append) = &self.append_insert
+            && append.revision != self.buffers[append.buffer].revision()
+        {
+            self.record_append_insert_carets();
+        }
+    }
+
+    /// Records the current carets as the ones the append session's typing
+    /// left, while that session is still the active Insert session.
+    pub(super) fn record_append_insert_carets(&mut self) {
+        let pane = self.active_pane;
+        let buffer = self.active().buffer;
+        let carets = self.active().selection.clone();
+        let revision = self.buffers[buffer].revision();
+        if self.mode == Mode::Insert
+            && let Some(append) = &mut self.append_insert
+            && append.pane == pane
+            && append.buffer == buffer
+        {
+            append.revision = revision;
+            append.carets = carets;
+        }
     }
 
     /// Executes one validated semantic invocation. Key bindings, the command
@@ -5601,7 +5847,7 @@ impl App {
         self.plugins.foreground_generation += 1;
         self.sync_provider_reload();
         self.sync_provider_overwrite();
-        self.cancel_pointer_drag();
+        self.cancel_pointer_drag_preserving_pane_release();
         // Protocol and headless semantic commands bypass `handle_input`, but
         // they can move the originating selection just as surely as a key.
         self.invalidate_all_partial_guards();
@@ -5764,13 +6010,13 @@ impl App {
             }
             (EditorCommand::SplitVertical, InvocationParameters::OptionalPath(path)) => {
                 return match path {
-                    Some(path) => self.split(Axis::Horizontal, Some(path)),
+                    Some(path) => self.split_document(Axis::Horizontal, path),
                     None => self.execute_editor_command(EditorCommand::SplitVertical),
                 };
             }
             (EditorCommand::SplitHorizontal, InvocationParameters::OptionalPath(path)) => {
                 return match path {
-                    Some(path) => self.split(Axis::Vertical, Some(path)),
+                    Some(path) => self.split_document(Axis::Vertical, path),
                     None => self.execute_editor_command(EditorCommand::SplitHorizontal),
                 };
             }
@@ -6384,7 +6630,7 @@ impl App {
                 self.open_service_health();
                 Ok(())
             }
-            (Colon::Open, InvocationParameters::Path(path)) => self.open_file(path),
+            (Colon::Open, InvocationParameters::Path(path)) => self.open_document(path),
             (Colon::Detach, InvocationParameters::None) => {
                 self.request_detach();
                 Ok(())
@@ -6679,14 +6925,18 @@ fn edit_confirmation_text(input: &mut String, cursor: &mut usize, key: KeyStroke
             *cursor += 1;
         }
         (KeyCode::Backspace, _) if *cursor > 0 => {
-            *cursor -= 1;
-            characters.remove(*cursor);
+            let start = crate::grapheme::str_previous(input, *cursor);
+            characters.drain(start..*cursor);
+            *cursor = start;
         }
         (KeyCode::Delete, _) if *cursor < characters.len() => {
-            characters.remove(*cursor);
+            let end = crate::grapheme::str_next(input, *cursor);
+            characters.drain(*cursor..end);
         }
-        (KeyCode::Left, _) => *cursor = cursor.saturating_sub(1),
-        (KeyCode::Right, _) => *cursor = (*cursor + 1).min(characters.len()),
+        (KeyCode::Left, _) => *cursor = crate::grapheme::str_previous(input, *cursor),
+        (KeyCode::Right, _) => {
+            *cursor = crate::grapheme::str_next(input, *cursor).min(characters.len());
+        }
         (KeyCode::Home, _) => *cursor = 0,
         (KeyCode::End, _) => *cursor = characters.len(),
         _ => return,

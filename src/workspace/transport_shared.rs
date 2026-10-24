@@ -53,6 +53,8 @@ pub enum ServerEvent<P = Option<u32>> {
         interactive: bool,
         /// Whether this client can hand a `:quit-here` directory to its shell.
         directory_handoff: bool,
+        /// Whether the interactive frontend can render media projections.
+        native_media: bool,
         responses: ResponseSender,
     },
     Request {
@@ -430,6 +432,7 @@ where
         client_version,
         role,
         geometry,
+        native_media,
         directory_handoff,
     } = hello
     else {
@@ -504,6 +507,7 @@ where
             peer_process: peer_process.clone(),
             geometry: geometry.into(),
             interactive,
+            native_media,
             directory_handoff,
             responses,
         })
@@ -635,15 +639,20 @@ fn peer_hung_up(error: &anyhow::Error) -> bool {
 pub(super) fn request_allowed_for_role(request: &ClientRequest, role: ClientRole) -> bool {
     match request {
         ClientRequest::Hello { .. } => false,
-        #[cfg(windows)]
         ClientRequest::FrameDrawn { .. } => role == ClientRole::Interactive,
-        ClientRequest::Input { .. }
+        ClientRequest::MediaNavigate { .. }
+        | ClientRequest::MediaBack { .. }
+        | ClientRequest::DismissDocumentPreview { .. }
+        | ClientRequest::MediaPages { .. }
+        | ClientRequest::Input { .. }
         | ClientRequest::Invoke { .. }
         | ClientRequest::VisitDestination { .. }
         | ClientRequest::Notify { .. }
         | ClientRequest::AttachWait { .. }
         | ClientRequest::Pointer { .. }
+        | ClientRequest::CancelPointer
         | ClientRequest::Resize { .. }
+        | ClientRequest::InputBarrier { .. }
         | ClientRequest::Resynchronize
         | ClientRequest::NativeSwitchCommit { .. }
         | ClientRequest::NativeParentSwitchCommitObserved { .. }
@@ -851,6 +860,39 @@ async fn write_encoded_with_timeout<W: AsyncWrite + Unpin>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn input_barrier_is_bounded_and_only_available_to_interactive_clients() {
+        let request = ClientRequest::InputBarrier { serial: u64::MAX };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        let decoded: ClientRequest = serde_json::from_slice(&bytes).unwrap();
+        assert!(decoded.validate().is_ok());
+        assert!(request_allowed_for_role(&decoded, ClientRole::Interactive));
+        assert!(!request_allowed_for_role(&decoded, ClientRole::Control));
+    }
+
+    #[test]
+    fn pointer_cancellation_is_only_available_to_interactive_clients() {
+        let bytes = serde_json::to_vec(&ClientRequest::CancelPointer).unwrap();
+        let decoded: ClientRequest = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(decoded, ClientRequest::CancelPointer));
+        assert!(decoded.validate().is_ok());
+        assert!(request_allowed_for_role(&decoded, ClientRole::Interactive));
+        assert!(!request_allowed_for_role(&decoded, ClientRole::Control));
+    }
+
+    #[test]
+    fn preview_dismissal_is_an_interactive_client_request() {
+        let request = ClientRequest::DismissDocumentPreview {
+            pane: 2,
+            generation: 17,
+        };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        let decoded: ClientRequest = serde_json::from_slice(&bytes).unwrap();
+        assert!(decoded.validate().is_ok());
+        assert!(request_allowed_for_role(&decoded, ClientRole::Interactive));
+        assert!(!request_allowed_for_role(&decoded, ClientRole::Control));
+    }
+
     #[cfg(windows)]
     fn control_hello(project: Vec<u8>, protocol: u32) -> ClientRequest {
         ClientRequest::Hello {
@@ -865,6 +907,7 @@ mod tests {
             client_version: crate::protocol::CLIENT_VERSION.to_owned(),
             role: ClientRole::Control,
             geometry: FrameGeometry::default().into(),
+            native_media: false,
             directory_handoff: false,
         }
     }
@@ -1116,6 +1159,7 @@ mod tests {
                     client_version: crate::protocol::CLIENT_VERSION.to_owned(),
                     role: ClientRole::Control,
                     geometry: FrameGeometry::default().into(),
+                    native_media: false,
                     directory_handoff: false,
                 },
             )

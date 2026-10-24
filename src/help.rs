@@ -27,6 +27,8 @@ const KEY_COLUMN: usize = 12;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HelpTopic {
     Text,
+    Media,
+    PdfPages,
     Explorer,
     DirectoryTree,
     Config,
@@ -52,6 +54,8 @@ pub enum HelpTopic {
 impl HelpTopic {
     pub const ALL: &'static [Self] = &[
         Self::Text,
+        Self::Media,
+        Self::PdfPages,
         Self::Explorer,
         Self::DirectoryTree,
         Self::Config,
@@ -82,6 +86,8 @@ impl HelpTopic {
     /// One document per buffer type describes both.
     pub fn for_context(scope: BindingScope) -> Self {
         match scope {
+            BindingScope::Media => Self::Media,
+            BindingScope::PdfPages => Self::PdfPages,
             BindingScope::Directory => Self::Explorer,
             BindingScope::DirectoryTree => Self::DirectoryTree,
             BindingScope::Settings => Self::Config,
@@ -130,6 +136,8 @@ impl HelpTopic {
     /// matches the `[RO]` the pane title and global status line carry.
     pub fn title_for(self, _grammar: GrammarKind, read_only: bool) -> String {
         let context = match self {
+            Self::Media => "MEDIA",
+            Self::PdfPages => "PDF PAGES",
             Self::Text => "TEXT",
             Self::Explorer => "EXPLORER",
             Self::DirectoryTree => "DIRECTORY TREE",
@@ -160,6 +168,17 @@ impl HelpTopic {
     /// renderer, so these strings describe ideas rather than terminal rows.
     pub fn overview_for(self, _grammar: GrammarKind) -> &'static [&'static str] {
         match self {
+            Self::PdfPages => &[
+                "Each read-only row names one PDF page. Use ordinary motions, counts and search to choose a row.",
+                "Enter displays the chosen page. Escape or q opens the containing directory with this PDF selected; in Select mode, it first returns to Normal.",
+            ],
+            Self::Media => &[
+                "Images and PDF pages are read-only. Normal-mode vertical motions pan zoomed PDFs and choose pages at fit size; image vertical motions always pan.",
+                "Escape fits zoomed media first, then clears a selection, then leaves the preview. PDFs return to their page rows; images return to their containing directory.",
+                "View alignment commands pan or center media. Zoom and fit commands appear in the key table below.",
+                "Select mode extends a PDF word/line selection or image-region corner with movement keys. Escape returns to Normal and follows the same fit, selection, and preview order.",
+                "Wheel pans; Ctrl-wheel zooms at the pointer; middle-drag pans. PDF left-drag selects text. Shift-left-drag selects an image region. Yank copies the selection to the system clipboard.",
+            ],
             Self::Text => &[
                 "Runyte is a selection-first modal editor: move to select, then act. Every editing command works on whatever is selected, however many ranges that is.",
                 "NORMAL mode replaces the selection as you move. v enters SELECT mode, where moving extends every selection instead; v or Escape returns.",
@@ -276,7 +295,7 @@ const TERMINAL_OVERVIEW: &[&str] = &[
 const MOUSE_OVERVIEW: &[&str] = &[
     "Left click focuses a pane and places its caret. Shift-click extends the current selection, and left-button drag selects text and enters SELECT mode. The wheel scrolls the pane under the pointer; dragging a shared pane border resizes the split.",
     "Right-clicking any current selection copies all current selections to the system clipboard, exactly like {binding:Space c y}, without moving or replacing them.",
-    "A reviewed terminal accepts the same drag-selection and right-click copy gestures. A live terminal that requests SGR mouse input receives its mouse events instead. Runyte's mouse capture replaces the terminal's native text selection; set editor.mouse to false and restart when native selection is preferred.",
+    "A reviewed terminal accepts the same drag-selection and right-click copy gestures. In the native window, Ctrl-left-click (Cmd-left-click on macOS) follows the link under the pointer like {binding:g f}, including live terminal output. Other live terminal mouse events go to the child when it requests SGR mouse input. Runyte's mouse capture replaces the terminal's native text selection; set editor.mouse to false and restart when native selection is preferred.",
 ];
 
 const HELP_TRAILER: &str = ":help opens the general Runyte manual; :help <topic> jumps to one of\n\
@@ -979,7 +998,11 @@ fn terminal_insert_admits(binding: &crate::keymap::Binding, keymap: &Keymap) -> 
         } => navigation(exact) || continuations.iter().any(|binding| navigation(binding)),
         Lookup::NoMatch => false,
     };
-    terminal_escape || window_prefix || fast_pane_move || persistent_navigation
+    terminal_escape
+        || window_prefix
+        || fast_pane_move
+        || persistent_navigation
+        || keymap.terminal_clipboard_key(first)
 }
 
 fn help_key_label(key: Key) -> String {
