@@ -29,10 +29,10 @@ records relevant to the task:
   cost over time. Consult it when changing startup ordering, document loading,
   syntax parsing, or anything that runs on a timer; the harness that produces
   it is `benchmarks/`.
-- `context/issues/` contains open work, `context/issues/deferred/` contains
-  confirmed problems awaiting a broader design decision, and
-  `context/issues/resolved/` contains searchable diagnoses and regression
-  coverage for past fixes.
+- [GitHub Issues](https://github.com/runyte/runyte/issues) is the primary
+  backlog. `context/issues/` retains existing local reports pending migration,
+  deferred design problems, and searchable historical diagnoses. See Issues
+  below for the transition rules.
 
 Historical plans explain decisions but are not a second source of current
 behavior. The source, user guide, and current reference documents take
@@ -57,8 +57,9 @@ Repository-local skills live in `skills/`; read the relevant skill's `SKILL.md` 
 
 Keep repository development context and runtime workspace state separate:
 
-- `context/` is Git-tracked development context: plans, references, issues,
-  and durable project decisions belong here.
+- `context/` is Git-tracked development context: plans, references, historical
+  issue records, and durable project decisions belong here. New issue tracking
+  belongs on GitHub.
 - `.runyte/` is Git-ignored editor runtime state used by the optional
   persistent session host and its local transport/lock files.
 - `.runyte/cache/images/` holds images pasted with `Ctrl-v`. They exist to
@@ -78,76 +79,74 @@ file; do not maintain a second copy.
 
 ## Issues
 
-Tracked issues live under `context/issues/`, one Markdown file per issue named
-after its topic in `snake_case`: `x_behavior.md`,
-`light_and_dark_themes.md`. Files directly in that directory are open; the
-ones under `resolved/` are done.
+[GitHub Issues](https://github.com/runyte/runyte/issues) is the source of truth
+for new bugs, feature requests, priorities, and issue status. Search existing
+open and closed issues before creating a report. Do not mirror GitHub issues
+in `context/issues/` or require a local resolution record for a GitHub fix.
+Suspected security vulnerabilities follow `SECURITY.md`, not the public tracker.
 
-Files under `deferred/` are confirmed problems, but they are also **not open
+Read the issue and its discussion before implementing it. Link the issue from
+the fixing pull request or commit. The resolution should explain the cause,
+resulting behavior, regression coverage, and any known limitations in the pull
+request or issue discussion. Use a closing reference only when the change fully
+resolves the issue; partial work should link it and state what remains. Do not
+close an issue merely because a fix exists in a local working tree.
+
+Keep code, tests, and relevant documentation together. There is no mandatory
+second commit for a resolution record. Durable architecture decisions and
+cross-cutting constraints belong in `context/reference/` or a development plan
+when useful; routine fixes need no additional context document. Plans follow
+`context/plans/README.md` and link their tracking issues rather than maintaining
+a competing backlog.
+
+### Existing local records
+
+Files directly under `context/issues/` remain open reports until migrated or
+resolved. Check these as well as GitHub when reviewing outstanding work during
+the transition. Do not bulk migrate or delete them as a side effect of fixing
+an unrelated issue. When migrating a report, preserve its reproduction,
+constraints, technical examples, and unresolved questions in the GitHub issue,
+and replace the local report with a short link to that issue so existing links
+keep working. The linked GitHub issue then owns status; the local file is only
+a pointer. Creating or updating GitHub content must be within the user's
+authorized task; if access or authorization is unavailable, prepare the report
+in the handoff rather than inventing an issue number or claiming it was posted.
+
+If an existing local report is fixed before migration, move it to `resolved/`
+and record the diagnosis, tests, and limitations alongside the fix. Preserve
+the report's technical details. A fixing PR link may identify the change; do
+not create an extra commit solely to insert the current commit's own hash.
+An empty local file is a placeholder whose report has not been written yet;
+ask for it instead of guessing.
+
+Files under `deferred/` are confirmed problems, but they are **not open
 implementation issues**. Their existing analysis explains why a local fix was
 not safe or sufficient. Do not implement or move one in response to a broad
 request such as "resolve all remaining issues"; resume it only when the user
 explicitly authorizes the deferred work and any required architecture or
-design decision has been made.
+design decision has been made. Migration to GitHub must preserve that deferred
+status and the conditions for resuming work; migration is not approval.
 
-An open issue is plain prose with no frontmatter or fixed shape. Normalize it
-before committing: describe the observed behavior, expected behavior,
-constraints, and reproduction in neutral technical language. Preserve exact
-keys, examples, errors, and code blocks, but remove conversational requests,
-first-person framing, personal paths, and opinions about the implementation
-process. An empty file is a placeholder whose report has not been written yet;
-ask for it instead of guessing.
+Keep `context/issues/resolved/` as searchable history. Existing `commit:`
+identifiers point to the original public implementation; `legacy_commit:`
+identifiers are provenance from private history and do not resolve in the
+public Git graph. Preserve these identifiers and do not add new legacy ones.
+Update a historical diagnosis only when a later change makes it misleading,
+linking the later issue or PR without replacing the original provenance.
+
+### Report quality
+
+Write reports and durable records in neutral technical language: observed and
+expected behavior, reproduction, and constraints. Preserve exact keys,
+examples, errors, and code blocks, but remove personal paths and conversational
+instructions from repository records and migration drafts. Do not rewrite
+someone else's GitHub report merely to enforce a house style.
 
 Sanitizing a path is not finished until the identifiers derived from it are
 sanitized too. A workspace ID is the unsalted SHA-256 of the project root, so
 publishing one beside a redacted path hands a reader the preimage to confirm.
 Recompute such values from the redacted path rather than keeping the originals,
 in tests and fixtures as much as in prose.
-
-Resolving an issue takes two commits:
-
-1. The change itself, with its tests and any `README.md` or
-   `context/reference/` updates.
-2. A follow-up that moves the file into `context/issues/resolved/` under the
-   same name and rewrites it. It is separate because the resolved file
-   records the hash of the commit above, which only exists once that commit
-   has landed.
-
-A resolved file is frontmatter, then `## Resolution`, then `## Report`:
-
-```markdown
----
-title: "One line stating the problem, not the fix"
-status: resolved
-reported: YYYY-MM-DD
-resolved: YYYY-MM-DD
-commit: <short hash of the commit that fixed it>
----
-```
-
-Resolved records imported at the public-history boundary use
-`legacy_commit:` instead. That identifier is provenance from private
-development history and does not resolve in the public Git graph. Do not add
-new legacy identifiers; fixes made in public history use `commit:` as shown
-above.
-
-`## Resolution` opens by naming that commit and its subject, then explains
-the diagnosis rather than listing the diff: which function was wrong and
-what it was doing instead, what was added and why it is shaped that way, and
-any deliberate deviation from Helix or from what the report asked for. Close
-it with the tests that cover the behavior, each named with the file it lives
-in, so the next agent can run them. Put anything the fix knowingly does not
-handle in a `Known limitation:` paragraph at the end.
-
-`## Report` is a neutral account of the problem rather than the instruction
-that produced the fix. Keep every technical detail from the open issue — the
-exact keys, observed and expected behavior, and any example, diagram, or code
-block. Where the report left something undecided, say so plainly instead of
-dropping it.
-
-A later fix to an already-resolved issue edits the resolved file in the same
-commit as the code, and leaves `commit:` or `legacy_commit:` pointing at the
-original implementation.
 
 ## Releasing
 

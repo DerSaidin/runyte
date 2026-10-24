@@ -1,5 +1,13 @@
 # Development plans
 
+[GitHub Issues](https://github.com/runyte/runyte/issues) tracks requests,
+priorities, and delivery status. Keep substantial designs here when their
+architecture, constraints, or implementation sequence benefit from versioned
+review alongside the code. A routine issue does not need a plan. Link a plan to
+its tracking issue when one exists, and link the plan from the issue when
+publishing it. Keep detailed design and implementation checklists in the plan;
+keep user-facing progress and resolution on GitHub.
+
 Plans are grouped by their relationship to the current editor:
 
 - `active/` contains approved work that is still being designed or built.
