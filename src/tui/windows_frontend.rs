@@ -871,6 +871,20 @@ async fn run_attachment(
                         .attachment_outcome()
                         .expect("final reply ends the attachment"));
                 };
+                if matches!(event, CrosstermEvent::FocusLost) {
+                    loop_state.repeats.observe(None, None, Instant::now());
+                    if let Some(outcome) = flush_wheel(client, exit, &mut loop_state.wheels)
+                        .await?
+                        .attachment_outcome() {
+                        return Ok(outcome);
+                    }
+                    if let Some(outcome) = send_or_exit(client, exit, &ClientRequest::CancelPointer)
+                        .await?
+                        .attachment_outcome() {
+                        return Ok(outcome);
+                    }
+                    continue;
+                }
                 if let CrosstermEvent::Resize(width, height) = event {
                     loop_state.repeats.observe(None, None, Instant::now());
                     if let Some(outcome) = flush_wheel(client, exit, &mut loop_state.wheels)

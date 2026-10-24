@@ -147,7 +147,8 @@ Deliberate limits:
 - Read-only OSC 10/11 default-colour queries are supported. Colour setters,
   palette queries, and OSC 52 are ignored.
 - Only SGR (`DECSET 1006`) mouse reports are forwarded; pane borders remain
-  editor-owned.
+  editor-owned. Alt-left-press inside a pane starts editor-owned pane dragging
+  and is not forwarded to the child; its drag and release remain editor-owned.
 - A cell holds one user-perceived character: a code point that continues the
   cluster before the cursor, such as a combining mark, variation selector,
   skin tone, regional indicator or the parts of a joined emoji, joins that

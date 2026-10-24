@@ -130,6 +130,44 @@ fn equalizing_is_reached_from_the_window_namespace_alone() {
 }
 
 #[test]
+fn shifted_window_directions_move_the_pane_to_that_side() {
+    let cases = [
+        ('H', EditorCommand::MoveWindowLeft),
+        ('J', EditorCommand::MoveWindowDown),
+        ('K', EditorCommand::MoveWindowUp),
+        ('L', EditorCommand::MoveWindowRight),
+    ];
+    for (letter, command) in cases {
+        let target = BindingTarget::Editor(command);
+        let ctrl_w = KeySequence::from([Key::ctrl('w'), Key::char(letter)]);
+        let space_w = KeySequence::from([Key::char(' '), Key::char('w'), Key::char(letter)]);
+        for mode in [Mode::Normal, Mode::Select] {
+            for keys in [&ctrl_w, &space_w] {
+                assert!(
+                    matches!(
+                        default_keymap().lookup(mode, keys),
+                        Lookup::Exact(binding) if binding.target == target
+                    ),
+                    "{keys} in {mode:?}"
+                );
+            }
+        }
+        assert!(matches!(
+            default_keymap().lookup(Mode::Insert, &ctrl_w),
+            Lookup::Exact(binding) if binding.target == target
+        ));
+        // The lowercase letter keeps focusing in that direction.
+        assert!(matches!(
+            default_keymap().lookup(
+                Mode::Normal,
+                &KeySequence::from([Key::ctrl('w'), Key::char(letter.to_ascii_lowercase())])
+            ),
+            Lookup::Exact(binding) if binding.target != target
+        ));
+    }
+}
+
+#[test]
 fn finder_and_workspace_search_are_global_in_every_buffer_scope() {
     let cases = [
         (" /f", EditorCommand::OpenFilePicker),

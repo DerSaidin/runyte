@@ -650,6 +650,7 @@ pub(super) fn request_allowed_for_role(request: &ClientRequest, role: ClientRole
         | ClientRequest::Notify { .. }
         | ClientRequest::AttachWait { .. }
         | ClientRequest::Pointer { .. }
+        | ClientRequest::CancelPointer
         | ClientRequest::Resize { .. }
         | ClientRequest::InputBarrier { .. }
         | ClientRequest::Resynchronize
@@ -864,6 +865,16 @@ mod tests {
         let request = ClientRequest::InputBarrier { serial: u64::MAX };
         let bytes = serde_json::to_vec(&request).unwrap();
         let decoded: ClientRequest = serde_json::from_slice(&bytes).unwrap();
+        assert!(decoded.validate().is_ok());
+        assert!(request_allowed_for_role(&decoded, ClientRole::Interactive));
+        assert!(!request_allowed_for_role(&decoded, ClientRole::Control));
+    }
+
+    #[test]
+    fn pointer_cancellation_is_only_available_to_interactive_clients() {
+        let bytes = serde_json::to_vec(&ClientRequest::CancelPointer).unwrap();
+        let decoded: ClientRequest = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(decoded, ClientRequest::CancelPointer));
         assert!(decoded.validate().is_ok());
         assert!(request_allowed_for_role(&decoded, ClientRole::Interactive));
         assert!(!request_allowed_for_role(&decoded, ClientRole::Control));

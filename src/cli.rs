@@ -2104,6 +2104,14 @@ async fn run(
                 match input.transpose()? {
                     // Fall through to the draw at the bottom of the loop
                     // rather than taking the lifecycle `continue` below.
+                    Some(CrosstermEvent::FocusLost) => {
+                        key_repeat_detector.observe(None, None, Instant::now());
+                        if !app.cancel_pointer_drag() {
+                            #[cfg(not(windows))]
+                            { frame_pending |= terminal_events.input_barrier() != 0; }
+                            continue;
+                        }
+                    }
                     Some(event) if is_redraw_only_event(&event) => {
                         key_repeat_detector.observe(None, None, Instant::now());
                     }
@@ -3076,6 +3084,9 @@ async fn run_host_server(
                                     ) => {}
                                     Err(error) => host.report_host_error(error.to_string()),
                                 }
+                            }
+                            ClientRequest::CancelPointer => {
+                                changed |= host.cancel_pointer_drag();
                             }
                             ClientRequest::Resize { geometry } => {
                                 if let Some(client) = active.as_mut() {
@@ -5010,6 +5021,14 @@ async fn run_attached(
                     continue;
                 }
                 'physical: {
+                if matches!(event, CrosstermEvent::FocusLost) {
+                    key_repeat_detector.observe(None, None, Instant::now());
+                    if let Some(batch) = pointer_batcher.take() {
+                        client.send(&batch.request()).await?;
+                    }
+                    client.send(&ClientRequest::CancelPointer).await?;
+                    break 'physical;
+                }
                 let key_kind = terminal_key_kind(&event);
                 let Some(input) = convert_event(event)? else {
                     key_repeat_detector.observe(key_kind, None, Instant::now());
@@ -7214,7 +7233,8 @@ fn is_wheel_event(kind: PointerEventKind) -> bool {
 /// or Git refresh happened to redraw. The new size needs no editor state
 /// change — Ratatui reconciles its buffers inside `draw`, and the layout reads
 /// the new geometry from the frame — so the whole fix is to let the loop reach
-/// that draw. Focus changes leave the shape alone and stay on the quiet path.
+/// that draw. Focus loss is handled separately to cancel captured gestures;
+/// otherwise focus changes leave the shape alone and stay on the quiet path.
 fn is_redraw_only_event(event: &CrosstermEvent) -> bool {
     match event {
         CrosstermEvent::Resize(_, _) => true,

@@ -12,7 +12,7 @@ mod host_open_atomicity;
 // Application-module dependencies:
 use super::{
     App, Axis, Buffer, BufferKind, CommandRefusal, ContentAlignment, DiffSession, DiffSide,
-    DirectoryReloadConfirmation, DirectoryView, FileObservation, FileReloadConfirmation,
+    DirectoryReloadConfirmation, DirectoryView, Edge, FileObservation, FileReloadConfirmation,
     FsConfirmation, FsOperation, FsPlan, GeneratedViewIdentity, HashSet, InputGrammar, Layout,
     ListAction, ListPicker, MAX_DIFF_BYTES, MaximizedPane, MaximizedView, Mode, PaneDirectory,
     Path, PathBuf, PickerItem, PromptKind, Result, Selection, SelectionSemantics, Side, TerminalId,
@@ -2890,7 +2890,14 @@ impl App {
             self.action_failed("no previously focused pane to swap with");
             return;
         };
+        self.swap_pane_contents(previous);
+    }
 
+    /// Exchanges the complete contents of the active pane with `previous`,
+    /// then follows the active content to `previous`'s position. The split tree and
+    /// its pane geometry remain untouched.
+    pub(super) fn swap_pane_contents(&mut self, previous: usize) {
+        let active = self.active_pane;
         let active_content = self
             .panes
             .remove(&active)
@@ -2926,6 +2933,43 @@ impl App {
         self.activate_pane(previous);
         self.finish_pane_focus(active, terminal_input);
         self.status("swapped pane contents");
+    }
+
+    /// Lays the active pane along one whole side of the layout, spanning
+    /// everything else, the way Vim's `Ctrl-w H/J/K/L` do.
+    ///
+    /// Unlike `swap-window` this reshapes the split tree, and the pane carries
+    /// its identity with it: selections, folds, history and a terminal session
+    /// stay with the content, which is what keeps focus where it was.
+    pub(super) fn move_pane_to_edge(&mut self, axis: Axis, edge: Edge) {
+        if let Some(maximized) = self.maximized {
+            self.action_failed(format!(
+                "{} keeps the current pane maximized",
+                maximized.view.label()
+            ));
+            return;
+        }
+        if matches!(self.layout, Layout::Pane(_)) {
+            self.status("only one pane");
+            return;
+        }
+        let side = super::pane_drag::edge_name(axis, edge);
+        if self.layout.move_to_edge(self.active_pane, axis, edge) {
+            self.status(format!("moved pane to the {side} edge"));
+        } else {
+            self.status(format!("pane already spans the {side} edge"));
+        }
+    }
+
+    /// Splits `target` in two and moves the active pane into its `edge` half.
+    pub(super) fn move_pane_beside(&mut self, target: usize, axis: Axis, edge: Edge) {
+        if self
+            .layout
+            .move_beside(self.active_pane, target, axis, edge)
+        {
+            let side = super::pane_drag::edge_name(axis, edge);
+            self.status(format!("moved pane into the {side} half of another pane"));
+        }
     }
 
     pub(super) fn only_window(&mut self) {

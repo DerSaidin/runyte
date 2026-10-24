@@ -889,6 +889,7 @@ fn render_editor_frame(
     for pane in &snapshot.panes {
         draw_pane(frame, &app.theme, snapshot.mode, pane);
     }
+    draw_pane_drop(frame, &app.theme, snapshot.pane_drop);
     if let Some(tree) = &snapshot.directory_tree {
         place_directory_tree_cursor(frame, tree);
     }
@@ -1205,6 +1206,7 @@ fn render_attached_frame(
     for pane in &snapshot.editor.panes {
         draw_pane(frame, &theme, snapshot.editor.mode, pane);
     }
+    draw_pane_drop(frame, &theme, snapshot.editor.pane_drop);
     if let Some(tree) = &snapshot.editor.directory_tree {
         place_directory_tree_cursor(frame, tree);
     }
@@ -1264,11 +1266,25 @@ pub fn overlay_rectangles(editor: &EditorSnapshot, overlays: &[OverlaySnapshot])
     let completion_visible = overlays
         .iter()
         .any(|overlay| overlay.kind == OverlayKind::Completion);
-    overlays
+    let mut areas: Vec<_> = overlays
         .iter()
         .filter(|overlay| overlay.kind != OverlayKind::Signature || !completion_visible)
         .filter_map(|overlay| snapshot_overlay_area(editor, overlay).map(from_tui_rect))
-        .collect()
+        .collect();
+    if let Some(area) = editor.pane_drop {
+        let area = to_tui_rect(area).intersection(to_tui_rect(editor.geometry.screen));
+        if area.width >= 2 && area.height >= 2 {
+            // Native media hides grid cells beneath its body. Reveal just the
+            // outline, preserving the image or document inside the drop area.
+            areas.extend([
+                from_tui_rect(TuiRect::new(area.x, area.y, area.width, 1)),
+                from_tui_rect(TuiRect::new(area.x, area.bottom() - 1, area.width, 1)),
+                from_tui_rect(TuiRect::new(area.x, area.y, 1, area.height)),
+                from_tui_rect(TuiRect::new(area.right() - 1, area.y, 1, area.height)),
+            ]);
+        }
+    }
+    areas
 }
 
 fn snapshot_overlay_area(editor: &EditorSnapshot, overlay: &OverlaySnapshot) -> Option<TuiRect> {
@@ -2465,6 +2481,28 @@ fn place_directory_tree_cursor(frame: &mut Frame<'_>, tree: &DirectoryTreeSnapsh
             frame.set_cursor_position(ScreenPosition::new(tree.area.x.saturating_add(1), y));
         }
     }
+}
+
+/// Outlines where an Alt-dragged pane would land, over whatever it would
+/// displace. Only the border is drawn, so the text underneath stays legible,
+/// and it is thick so it never reads as the active pane's own plain border.
+fn draw_pane_drop(frame: &mut Frame<'_>, theme: &TuiTheme, area: Option<crate::layout::Rect>) {
+    let Some(area) = area else {
+        return;
+    };
+    let area = to_tui_rect(area).intersection(frame.area());
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let outline = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .border_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_widget(outline, area);
 }
 
 fn draw_pane(frame: &mut Frame<'_>, theme: &TuiTheme, mode: Mode, pane: &PaneSnapshot) {
@@ -7927,6 +7965,42 @@ mod tests {
                             "{kind:?} {layout:?}, {width}x{height}, cell {x},{y}, {area:?}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pane_drop_overlay_rectangles_cover_only_the_painted_border() {
+        let mut app = App::new(Config::default(), None).unwrap();
+        let prepared = app.prepare_view(frame_geometry(TuiRect::new(0, 0, 20, 12)));
+        let mut editor = app.snapshot(&prepared);
+        let theme = TuiTheme::new(&app.theme);
+        for area in [
+            TuiRect::new(3, 2, 10, 7),
+            TuiRect::new(17, 9, 10, 7),
+            TuiRect::new(3, 2, 1, 7),
+            TuiRect::new(3, 2, 10, 1),
+        ] {
+            editor.pane_drop = Some(from_tui_rect(area));
+            let areas = overlay_rectangles(&editor, &[]);
+            let mut terminal = Terminal::new(TestBackend::new(20, 12)).unwrap();
+            terminal
+                .draw(|frame| draw_pane_drop(frame, &theme, editor.pane_drop))
+                .unwrap();
+            for y in 0..12 {
+                for x in 0..20 {
+                    let covered = areas.iter().any(|area| {
+                        x >= area.x
+                            && x < area.x + area.width
+                            && y >= area.y
+                            && y < area.y + area.height
+                    });
+                    assert_eq!(
+                        covered,
+                        terminal.backend().buffer()[(x, y)].symbol() != " ",
+                        "drop {area:?}, cell {x},{y}"
+                    );
                 }
             }
         }

@@ -9,6 +9,7 @@ pub(super) struct Queue<T = ()> {
     bytes: usize,
     pending: Option<(u64, u64)>,
     serial: u64,
+    pane_gesture: Option<u64>,
 }
 
 #[cfg(test)]
@@ -20,6 +21,43 @@ impl<T> Queue<T> {
         self.inputs.clear();
         self.bytes = 0;
         self.pending = None;
+        self.pane_gesture = None;
+    }
+    /// Keep an editor-owned Alt-left gesture out of native image panning and
+    /// document selection, including when Alt is released before the button.
+    fn editor_pane_gesture(&mut self, input: &NativeInput) -> bool {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEventKind};
+        if self.pane_gesture != Some(input.attachment) {
+            self.pane_gesture = None;
+        }
+        match &input.event {
+            Event::Mouse(event) => match event.kind {
+                MouseEventKind::Down(button) => {
+                    self.pane_gesture = (button == MouseButton::Left
+                        && event.modifiers == KeyModifiers::ALT)
+                        .then_some(input.attachment);
+                    self.pane_gesture.is_some()
+                }
+                MouseEventKind::Up(_) => self.pane_gesture.take().is_some(),
+                _ => self.pane_gesture.is_some(),
+            },
+            Event::FocusLost => {
+                self.pane_gesture = None;
+                false
+            }
+            // Keys must reach the editor so Escape can cancel its drag. Keep
+            // owning the trailing mouse release after cancellation.
+            _ => self.pane_gesture.is_some(),
+        }
+    }
+    /// A release outside the window may never reach GPUI's mouse-up handler.
+    /// Cancel on the first buttonless motion instead of turning hover into a
+    /// synthetic left drag (or committing an unseen drop with a synthetic up).
+    fn cancel_lost_pane_button(&mut self, input: &mut NativeInput, left_pressed: bool) {
+        if !left_pressed && self.pane_gesture == Some(input.attachment) {
+            self.pane_gesture = None;
+            input.event = crossterm::event::Event::FocusLost;
+        }
     }
     #[cfg(test)]
     pub fn push(&mut self, input: NativeInput, action: T) -> bool {
@@ -138,71 +176,81 @@ impl super::NativeView {
                 .frame
                 .as_ref()
                 .is_some_and(|frame| frame.id == input.presented);
-            match action {
-                RoutingAction::Direct => {
-                    if let Event::Key(key) = input.event {
-                        if self.preview_key(key, cx) {
+            if let RoutingAction::Move(event) = &action {
+                self.routing.cancel_lost_pane_button(
+                    &mut input,
+                    event.pressed_button == Some(MouseButton::Left),
+                );
+            }
+            let cancelled = matches!(input.event, Event::FocusLost);
+            if !self.routing.editor_pane_gesture(&input) && !cancelled {
+                match action {
+                    RoutingAction::Direct => {
+                        if let Event::Key(key) = input.event {
+                            if self.preview_key(key, cx) {
+                                continue;
+                            }
+                            if let Some(event) = self.window_shortcut(key, cx) {
+                                let Some(event) = event else {
+                                    continue;
+                                };
+                                input.event = event;
+                            }
+                        }
+                    }
+                    RoutingAction::Down(event) => {
+                        if current
+                            && ((event.button == MouseButton::Left
+                                && self.preview_pointer(event.position, 0, cx))
+                                || self.media_mouse_down(&event, cx))
+                        {
                             continue;
                         }
-                        if let Some(event) = self.window_shortcut(key, cx) {
-                            let Some(event) = event else {
-                                continue;
-                            };
-                            input.event = event;
+                        if event.button == MouseButton::Middle {
+                            continue;
                         }
                     }
-                }
-                RoutingAction::Down(event) => {
-                    if current
-                        && ((event.button == MouseButton::Left
-                            && self.preview_pointer(event.position, 0, cx))
-                            || self.media_mouse_down(&event, cx))
-                    {
-                        continue;
+                    RoutingAction::Up(event) => {
+                        if current
+                            && ((event.button == MouseButton::Left
+                                && self.preview_pointer(event.position, 2, cx))
+                                || self.media_mouse_up(event.position, cx))
+                        {
+                            continue;
+                        }
+                        if event.button == MouseButton::Middle {
+                            continue;
+                        }
                     }
-                    if event.button == MouseButton::Middle {
-                        continue;
+                    RoutingAction::Move(event) => {
+                        if current
+                            && (self.preview_pointer(event.position, 1, cx)
+                                || self.media_mouse_move(&event, cx))
+                        {
+                            continue;
+                        }
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            continue;
+                        }
                     }
-                }
-                RoutingAction::Up(event) => {
-                    if current
-                        && ((event.button == MouseButton::Left
-                            && self.preview_pointer(event.position, 2, cx))
-                            || self.media_mouse_up(event.position, cx))
-                    {
-                        continue;
+                    RoutingAction::Scroll(event, metrics, when) => {
+                        if current
+                            && (self.preview_scroll(&event, cx) || self.media_scroll(&event, cx))
+                        {
+                            continue;
+                        }
+                        if matches!(event.touch_phase, TouchPhase::Started) {
+                            self.scroll = ScrollAccumulator::default();
+                        }
+                        let Some((kind, events)) = self
+                            .scroll
+                            .push(ScrollAccumulator::delta(event.delta, metrics), when)
+                        else {
+                            continue;
+                        };
+                        input.event = mouse_event(metrics, event.position, kind, event.modifiers);
+                        copies = events;
                     }
-                    if event.button == MouseButton::Middle {
-                        continue;
-                    }
-                }
-                RoutingAction::Move(event) => {
-                    if current
-                        && (self.preview_pointer(event.position, 1, cx)
-                            || self.media_mouse_move(&event, cx))
-                    {
-                        continue;
-                    }
-                    if event.pressed_button != Some(MouseButton::Left) {
-                        continue;
-                    }
-                }
-                RoutingAction::Scroll(event, metrics, when) => {
-                    if current && (self.preview_scroll(&event, cx) || self.media_scroll(&event, cx))
-                    {
-                        continue;
-                    }
-                    if matches!(event.touch_phase, TouchPhase::Started) {
-                        self.scroll = ScrollAccumulator::default();
-                    }
-                    let Some((kind, events)) = self
-                        .scroll
-                        .push(ScrollAccumulator::delta(event.delta, metrics), when)
-                    else {
-                        continue;
-                    };
-                    input.event = mouse_event(metrics, event.position, kind, event.modifiers);
-                    copies = events;
                 }
             }
             let barrier = self

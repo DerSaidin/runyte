@@ -11,13 +11,13 @@ use super::{
     CommandArguments, CommandAvailability, CommandExecutionContext, CommandId, CommandInvocation,
     CommandMatch, CommandOutcome, CommandOutcomeHint, CommandRefusal, CommandState,
     CommandUnavailable, CompletionSource, ContentAlignment, DEFAULT_MACRO_REGISTER,
-    DeletionAuthorization, DeletionMode, DelimiterPair, DiffScope, EditorCommand, EditorIntent,
-    EntryKind, FileObservation, FilePicker, FinderTarget, FsOperation, GeneratedViewIdentity,
-    GrammarContext, GrammarNotice, GrammarOutput, HOVER_PEEK_ROWS, HashSet, HelpInvocation,
-    InputEvent, InputGrammar, Instant, InvocationParameters, KeyCode, KeySequence, KeyStroke,
-    Keymap, LineDirection, ListPicker, LspCommand, MaximizedView, Mode, Modifiers, Motion, Offset,
-    Path, PathBuf, PathHint, PickerTarget, PointerButton, PointerDrag, PointerEvent,
-    PointerEventKind, PointerOutcome, PreparedView, ProgramAction, ProgramActionMenu,
+    DeletionAuthorization, DeletionMode, DelimiterPair, DiffScope, Edge, EditorCommand,
+    EditorIntent, EntryKind, FileObservation, FilePicker, FinderTarget, FsOperation,
+    GeneratedViewIdentity, GrammarContext, GrammarNotice, GrammarOutput, HOVER_PEEK_ROWS, HashSet,
+    HelpInvocation, InputEvent, InputGrammar, Instant, InvocationParameters, KeyCode, KeySequence,
+    KeyStroke, Keymap, LineDirection, ListPicker, LspCommand, MaximizedView, Mode, Modifiers,
+    Motion, Offset, Path, PathBuf, PathHint, PickerTarget, PointerButton, PointerDrag,
+    PointerEvent, PointerEventKind, PointerOutcome, PreparedView, ProgramAction, ProgramActionMenu,
     ProgramChoice, PromptKind, Range, RangeIntent, RequestKind, Result, SearchMode, SearchQuery,
     Selection, SelectionSemantics, SettingId, SettingType, SettingValue, SignatureContext,
     StashScope, SyntaxObject, SyntaxObjectPart, SyntaxSelectionTransform, SystemClipboard,
@@ -769,7 +769,7 @@ impl App {
         if !matches!(input, InputEvent::Pointer(_)) {
             self.prompt_input_error = None;
             self.plugins.foreground_generation += 1;
-            self.cancel_pointer_drag();
+            self.cancel_pointer_drag_preserving_pane_release();
         }
         if self.macro_replay.is_some() {
             if is_macro_replay_cancel(&input) {
@@ -952,6 +952,12 @@ impl App {
         if self.macro_replay.is_some() {
             return Ok(PointerOutcome::Unchanged);
         }
+        if self.consume_cancelled_pane_pointer(event) {
+            return Ok(PointerOutcome::Unchanged);
+        }
+        if event.kind == PointerEventKind::Moved && self.pointer_pane_drag_active() {
+            return Ok(PointerOutcome::Unchanged);
+        }
         // Crossterm's mouse capture includes passive any-motion events. They
         // carry no editor intent and must not clear status, hints, or trigger
         // any semantic work when this owned boundary is used by another
@@ -998,6 +1004,13 @@ impl App {
                 }
                 _ => {}
             }
+            return Ok(PointerOutcome::Changed);
+        }
+        // A captured pane drag owns its release even over the directory sidebar.
+        if matches!(self.pointer_drag, Some(PointerDrag::MovePane { .. }))
+            && self.handle_pane_drag(event, view)
+        {
+            self.invalidate_all_partial_guards();
             return Ok(PointerOutcome::Changed);
         }
         if let Some(area) = view.tree_area
@@ -1109,6 +1122,11 @@ impl App {
             self.retire_detached_ephemeral_buffers();
             self.note_destination_activation();
             self.refresh_navigator();
+            return Ok(PointerOutcome::Changed);
+        }
+        if self.handle_pane_drag(event, view) {
+            self.invalidate_all_partial_guards();
+            self.status_error = false;
             return Ok(PointerOutcome::Changed);
         }
         let active_pane = self.active_pane;
@@ -1352,21 +1370,8 @@ impl App {
                     };
                     let delta = cells.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
                     if delta != 0 {
-                        self.layout.resize_between_cells(
-                            first,
-                            second,
-                            crate::layout::Rect {
-                                x: view.geometry.editor.x
-                                    + view.tree_area.map_or(0, |tree| tree.width),
-                                width: view
-                                    .geometry
-                                    .editor
-                                    .width
-                                    .saturating_sub(view.tree_area.map_or(0, |tree| tree.width)),
-                                ..view.geometry.editor
-                            },
-                            delta,
-                        );
+                        self.layout
+                            .resize_between_cells(first, second, view.layout_area(), delta);
                     }
                     self.pointer_drag = Some(PointerDrag::Resize {
                         first,
@@ -1378,6 +1383,9 @@ impl App {
                 }
                 Some(PointerDrag::DirectoryTreeResize) => {
                     unreachable!("tree drag is handled before pane input")
+                }
+                Some(PointerDrag::MovePane { .. }) => {
+                    unreachable!("pane moves are handled before pane input")
                 }
                 None => {}
             },
@@ -4954,6 +4962,10 @@ impl App {
             Command::FocusWindowRight => self.focus_from_terminal_insert(1, 0),
             Command::NextWindow => self.next_window_from_terminal_insert(),
             Command::SwapWindow => self.swap_window(),
+            Command::MoveWindowLeft => self.move_pane_to_edge(Axis::Horizontal, Edge::Start),
+            Command::MoveWindowDown => self.move_pane_to_edge(Axis::Vertical, Edge::End),
+            Command::MoveWindowUp => self.move_pane_to_edge(Axis::Vertical, Edge::Start),
+            Command::MoveWindowRight => self.move_pane_to_edge(Axis::Horizontal, Edge::End),
             Command::CloseWindow => self.close_pane(),
             Command::OnlyWindow => self.only_window(),
             Command::EqualizeWindows => self.equalize_panes(),
@@ -5824,7 +5836,7 @@ impl App {
         self.plugins.foreground_generation += 1;
         self.sync_provider_reload();
         self.sync_provider_overwrite();
-        self.cancel_pointer_drag();
+        self.cancel_pointer_drag_preserving_pane_release();
         // Protocol and headless semantic commands bypass `handle_input`, but
         // they can move the originating selection just as surely as a key.
         self.invalidate_all_partial_guards();

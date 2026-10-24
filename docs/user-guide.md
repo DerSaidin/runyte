@@ -605,6 +605,7 @@ Mouse support needs a terminal with mouse reporting and `editor.mouse: true`
 | Drag past the top or bottom row | Scroll and keep extending |
 | Wheel | Scroll the pane under the pointer |
 | Drag a shared border | Resize the split |
+| Alt-left-drag inside a pane | Rearrange panes using the [pane drop outline](#pane-keys) |
 | Right-click a selection | Copy all selections to the system clipboard, like `Space c y` |
 | Double-click a directory tree row | Toggle the directory or open the file, like Enter |
 
@@ -1711,7 +1712,8 @@ and pending key sequences retain their own bindings.
 | Escape | Dismiss overlay or pending keys; then fit → clear selection → PDF page buffer → explorer. Images go directly from cleared selection to explorer. |
 | Wheel / Shift-wheel | Pan vertically / horizontally; at fit size, vertical PDF scrolling changes pages |
 | Ctrl-wheel (Cmd-wheel on macOS) | Zoom around the pointer |
-| Middle-drag, right-drag, or Alt-left-drag | Pan |
+| Middle-drag or right-drag | Pan |
+| Alt-left-drag | Move the pane using the pane drop outline |
 | Left-drag on PDF text | Select words in reading order |
 | Left-drag on an image | Pan; double-click toggles fit / 2× fit |
 | Shift-left-drag | Select a rectangular image region, including on PDFs |
@@ -2658,7 +2660,7 @@ Runyte's own registers.
 
 Pane commands live under `Space w`, with `Ctrl-w` as the compatibility
 spelling. From Insert and Replace modes, `Ctrl-w` reaches focus movement
-(`h/j/k/l`), `w`, `x`, `n`, `p`, and `a`; Terminal Insert adds `v/s` and
+(`h/j/k/l`), pane moves (`H/J/K/L`), `w`, `x`, `n`, `p`, and `a`; Terminal Insert adds `v/s` and
 `f/z` (see [Terminals](#terminals)).
 
 | Key | Action |
@@ -2666,6 +2668,7 @@ spelling. From Insert and Replace modes, `Ctrl-w` reaches focus movement
 | `Space w v` / `Space w s`, or `Ctrl-w v/s` | Vertical/horizontal splits; from a terminal, the new pane opens the working-directory explorer |
 | `Space w…` or `Ctrl-w…` | Window focus, close, next, and only-window operations |
 | `Space w x` or `Ctrl-w x` | Exchange the active pane's complete content with the previously focused pane, following the content to its new position |
+| `Space w H/J/K/L` or `Ctrl-w H/J/K/L` | Move the active pane to the left/bottom/top/right edge, spanning the full height or width |
 | `Space w =` | Equalize pane widths, then pane heights within each column |
 | `Space w f` / `Space w z`, or `Ctrl-w f` / `Ctrl-w z` | Toggle the full-screen pane / the centred Zen viewport |
 | `Ctrl-h/j/k/l` | Move between panes without a prefix, when `editor.fast_pane_keys` is on |
@@ -2677,6 +2680,16 @@ spelling. From Insert and Replace modes, `Ctrl-w` reaches focus movement
 
 Borders can also be dragged with the mouse. The key-hint popup after
 `Space w` lists every window command.
+
+Hold Alt and drag with the left mouse button inside a pane to rearrange it.
+A thick **pane drop outline** shows where it will land on release. The outer
+two columns or one row of the layout move it to that whole edge; the outer
+quarter of another pane splits that pane to make room; the middle of another
+pane swaps their complete contents. Shared borders resize even with Alt held.
+Alt-left-press inside a terminal pane belongs to Runyte and is not forwarded
+to the child, even when the child requests mouse reporting. Pane moves preserve
+the pane's content and terminal session, and are unavailable while Zen or
+full-screen maximizes a pane.
 
 **Examples:**
 
@@ -7202,6 +7215,10 @@ This is the list `:help key-actions` shows, grouped by topic.
 | `focus-window-right` | N S I R | last | Focus the pane to the right |
 | `next-window` | N S I R | last | Focus the next pane |
 | `swap-window` | N S I R | last | Swap this pane's content with the previously focused pane |
+| `move-window-left` | N S I R | last | Move pane to the left edge, full height |
+| `move-window-down` | N S I R | last | Move pane to the bottom edge, full width |
+| `move-window-up` | N S I R | last | Move pane to the top edge, full width |
+| `move-window-right` | N S I R | last | Move pane to the right edge, full height |
 | `close-window` | N S | last | Close the active pane |
 | `only-window` | N S | last | Close every pane except the active pane |
 | `equalize-windows` | N S | last | Equalize pane widths, then pane heights within each column |

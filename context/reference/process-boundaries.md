@@ -118,6 +118,13 @@ for GPU painting; active preview navigation also requires prepared local state.
 A new frame alone is not an input acknowledgment, and queued keys cannot
 approve a prompt they were not physically presented with.
 
+Private protocol version 80 adds the optional `pane_drop` rectangle to editor
+frames for the pane drop outline during Alt-drag, plus an attachment-owned
+`CancelPointer` request for focus-loss cancellation. The host owns the gesture
+and layout mutation; bundled frontends render the rectangle and report lost
+pointer capture. Cancellation clears the gesture and outline without applying
+a drop. Matching client and host protocol versions are required.
+
 ## Choosing a tier
 
 - Third-party code belongs in a plugin or a context client, according to who

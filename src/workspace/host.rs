@@ -1551,14 +1551,21 @@ impl WorkspaceHost {
                 frame,
                 repetitions,
             } => {
-                // Release ends a gesture even if autoscroll has since published
-                // a newer projection. It does not resolve any coordinates.
+                let pane_release = matches!(event.kind, crate::input::PointerEventKind::Up(_))
+                    && self.app.pointer_pane_drag_active();
+                // Selection/resize release needs no coordinates. A pane drop
+                // does, and must publish a frame that removes its outline.
                 if matches!(event.kind, crate::input::PointerEventKind::Up(_))
+                    && !pane_release
                     && self.app.cancel_pointer_drag()
                 {
                     return Ok(HostInputOutcome::AppliedWithoutVisualChange);
                 }
                 let Some(prepared) = self.prepared.as_ref() else {
+                    if pane_release {
+                        self.app.cancel_pointer_drag();
+                        return Ok(HostInputOutcome::Applied);
+                    }
                     return Ok(HostInputOutcome::IgnoredStaleFrame);
                 };
                 let continued_selection = self.app.pointer_selection_drag_active()
@@ -1569,6 +1576,10 @@ impl WorkspaceHost {
                 if (frame < prepared.pointer_compatible_since && !continued_selection)
                     || frame > prepared.id
                 {
+                    if pane_release {
+                        self.app.cancel_pointer_drag();
+                        return Ok(HostInputOutcome::Applied);
+                    }
                     return Ok(HostInputOutcome::IgnoredStaleFrame);
                 }
                 match self
@@ -2345,6 +2356,77 @@ mod tests {
         );
         assert!(host.pointer_autoscroll_delay(Instant::now()).is_none());
         assert!(!host.advance_pointer_autoscroll(Instant::now() + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn pane_drop_release_moves_on_a_compatible_frame_and_cancels_on_a_stale_one() {
+        for stale in [false, true] {
+            let mut host = host();
+            host.app_mut()
+                .execute(
+                    CommandInvocation::editor(
+                        EditorCommand::SplitVertical,
+                        CommandExecutionContext::default(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let pane = host.app().active_pane;
+            let first = host.prepare_frame(geometry());
+            let source = first.editor.pane(pane).unwrap().area;
+            let press = PointerEvent {
+                kind: PointerEventKind::Down(PointerButton::Left),
+                column: source.x + source.width / 2,
+                row: source.y + source.height / 2,
+                modifiers: Modifiers::ALT,
+            };
+            host.execute(HostCommand::Pointer {
+                event: press,
+                frame: first.id,
+                repetitions: 1,
+            })
+            .unwrap();
+            let drag = PointerEvent {
+                kind: PointerEventKind::Drag(PointerButton::Left),
+                column: 40,
+                row: 0,
+                ..press
+            };
+            host.execute(HostCommand::Pointer {
+                event: drag,
+                frame: first.id,
+                repetitions: 1,
+            })
+            .unwrap();
+            let preview = host.prepare_frame(geometry());
+            let destination = preview.editor.pane_drop.expect("drop preview");
+            if stale {
+                let mut resized = geometry();
+                resized.screen.width = 100;
+                resized.editor.width = 100;
+                host.prepare_frame(resized);
+            }
+            assert_eq!(
+                host.execute(HostCommand::Pointer {
+                    event: PointerEvent {
+                        kind: PointerEventKind::Up(PointerButton::Left),
+                        ..drag
+                    },
+                    frame: preview.id,
+                    repetitions: 1,
+                })
+                .unwrap(),
+                HostInputOutcome::Applied,
+                "release must remove the visible outline"
+            );
+            assert!(!host.app().pointer_pane_drag_active());
+            let final_frame = host.prepare_frame(geometry());
+            assert!(final_frame.editor.pane_drop.is_none());
+            assert_eq!(
+                final_frame.editor.pane(pane).unwrap().area,
+                if stale { source } else { destination }
+            );
+        }
     }
 
     #[test]

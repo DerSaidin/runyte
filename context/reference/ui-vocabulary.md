@@ -30,6 +30,13 @@ them, regardless of which extensibility direction is chosen.
   `gw` dims tree rows and replaces visible entry markers with jump labels;
   completing a label selects its path without opening it.
 - **Pane border** — the frame delimiting a pane.
+- **Pane drop outline** — a temporary thick accent outline during an Alt-left-drag,
+  showing the area the dragged pane would occupy on release. The interior stays
+  visible. A layout-edge target spans that whole edge, a pane-edge target splits
+  its destination, and a pane-middle target exchanges complete contents.
+  `EditorSnapshot.pane_drop` carries only the optional rectangle; the editor
+  owns hit testing and the move. Private bundled-client protocol version 80
+  carries this field for both terminal and desktop attachments.
 - **Pane title** — structural buffer identity in the pane's top border, such as
   `[file] path`, `[explorer] path`, `[notifications]`, or `[log]`, plus `[+]`,
   `[STALE]`, and `[RO]`, in that order, and finally `[zen]` or `[fullscreen]`
