@@ -1022,7 +1022,7 @@ mouse positioning and language-server formatting options. See
 | Key | Keeps | Adds |
 | --- | --- | --- |
 | `o` / `O` (Normal) | The row's exact leading spaces and tabs | Nothing: no list marker, no syntax level |
-| Enter (Insert) | The row's exact leading spaces and tabs | At most one level in `editor.indent` style when the row opens a block the syntax indentation query recognizes, such as `{`, `def f():`, `else:`, or a YAML key whose value is a nested block; an ordinary row inside a block adds nothing. A grammar that requires a tab still gets a tab |
+| Enter (Insert) | The row's exact leading spaces and tabs | At most one level in `editor.indent` style when the row opens a block the syntax indentation query recognizes: it ends with an opening bracket in a brace language, a Python header or YAML key ends with `:`, or a `case` label, an element's start tag, or a construct such as `else:` begins on it. An ordinary row inside a block adds nothing. A grammar that requires a tab still gets a tab |
 
 `o` and `O` place the caret after the indentation, and work the same with
 smart newline off.

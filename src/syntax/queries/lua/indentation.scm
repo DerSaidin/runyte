@@ -13,3 +13,4 @@
   (else_statement)
 ] @indent.always
 (arguments) @indent.begin
+["{" "("] @indent.opener

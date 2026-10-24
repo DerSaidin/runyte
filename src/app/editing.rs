@@ -1487,7 +1487,7 @@ impl App {
                         .map_or("", |indent| {
                             if indent.opening_tab_levels > 0 {
                                 "\t"
-                            } else if indent.opening_levels > 0 {
+                            } else if indent.opening_levels > 0 || indent.ends_with_opener {
                                 unit.as_str()
                             } else {
                                 ""

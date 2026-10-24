@@ -548,7 +548,9 @@ pub(super) const BUILTIN_LANGUAGES: &[LanguageDefinition] = &[
             },
         ],
         outline: QuerySource::new(&[JAVASCRIPT_OUTLINE]),
-        indentation: QuerySource::new(&[JAVASCRIPT_INDENTATION]),
+        // The JavaScript grammar parses JSX too, so `.js` and `.jsx` files
+        // take the TSX element capture.
+        indentation: QuerySource::new(&[JAVASCRIPT_INDENTATION, TSX_INDENTATION]),
         folds: QuerySource::new(&[JAVASCRIPT_FOLDS]),
     },
     LanguageDefinition {

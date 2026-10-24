@@ -1061,9 +1061,11 @@ fn newline_indentation_retains_ancestor_captures_in_later_injections() {
                 "{language} {marker}: {indent:?}"
             );
             // Only the blocks that begin on the row open a level beyond the
-            // row's own indentation; enclosing blocks are already in it.
+            // row's own indentation; enclosing blocks are already in it. The
+            // trailing brace is the same opening seen as a token.
             assert_eq!(
-                indent.opening_levels, opening,
+                (indent.opening_levels, indent.ends_with_opener),
+                (opening, opening > 0),
                 "{language} {marker}: {indent:?}"
             );
             assert_eq!((indent.begin_levels, indent.tab_levels), (0, 0));

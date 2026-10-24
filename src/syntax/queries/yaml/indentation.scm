@@ -5,3 +5,5 @@
 ; is a nested block is the construct that opens a level.
 (block_mapping_pair value: (block_node)) @indent.begin
 [(flow_mapping) (flow_sequence)] @indent.begin
+; A key whose value has not been typed yet ends its row with `:`.
+":" @indent.opener

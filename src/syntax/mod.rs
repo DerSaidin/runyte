@@ -477,6 +477,12 @@ pub struct Outline {
 /// either kind, and the tab contexts, that begin on the newline's row. A
 /// frontend that starts from the row's own leading whitespace already carries
 /// every enclosing level, so these are the levels it may add on top.
+///
+/// `ends_with_opener` is true when an `@indent.opener` capture ends the row:
+/// a token such as a trailing `{` or Python's `:` opens a level even when the
+/// construct it belongs to began on an earlier row, has no body yet, or did
+/// not parse. It is reported apart from the level counts because the token
+/// usually belongs to a container those counts already include.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewlineIndent {
     pub newline: SyntaxRange,
@@ -488,6 +494,7 @@ pub struct NewlineIndent {
     pub tab_levels: u16,
     pub opening_levels: u16,
     pub opening_tab_levels: u16,
+    pub ends_with_opener: bool,
     pub issues: Vec<IndentIssue>,
     pub truncated: bool,
     document: u64,
@@ -780,6 +787,9 @@ const OUTLINE_ISSUE_MESSAGE_LIMIT_CHARS: usize = 512;
 const FOLD_ITEM_LIMIT: usize = 4096;
 const SYNTAX_CAPABILITY_ISSUE_LIMIT: usize = 128;
 const INDENT_LEVEL_LIMIT: usize = 128;
+/// Trailing comments stepped over, and comment ancestors examined, while
+/// finding the token that ends a row.
+const ROW_TOKEN_EXTRA_LIMIT: usize = 4;
 
 /// Process-local identity for revision-scoped syntax paths. Zero is skipped so
 /// an accidentally zero-initialized path can never name a real document.
@@ -1087,7 +1097,12 @@ impl LazyIndentationCapability {
                 self.definition,
                 self.override_source.as_deref(),
                 self.definition.indentation,
-                &["indent.begin", "indent.always", "indent.tab"],
+                &[
+                    "indent.begin",
+                    "indent.always",
+                    "indent.tab",
+                    "indent.opener",
+                ],
             ) {
                 Ok(query) => IndentationCapability::Ready(query),
                 Err(error) => IndentationCapability::Failed(error),
@@ -1172,9 +1187,11 @@ fn compile_owned_query(
         })
     })
     .map_err(|error| error.to_string().into_boxed_str())?;
+    // A capture named with a leading underscore exists only for a built-in
+    // text predicate such as `#not-any-of?` and carries no capability meaning.
     if let Some((_, capture)) = query
         .captures()
-        .find(|(_, capture)| !allowed_captures.contains(capture))
+        .find(|(_, capture)| !capture.starts_with('_') && !allowed_captures.contains(capture))
     {
         return Err(format!("unsupported capture @{capture}").into_boxed_str());
     }
@@ -2329,15 +2346,20 @@ impl DocumentSyntax {
             let begin = query.get_capture("indent.begin");
             let always = query.get_capture("indent.always");
             let tab = query.get_capture("indent.tab");
+            let opener = query.get_capture("indent.opener");
+            let row_start = checked_char_to_byte(text, text.line_to_offset(newline_row))?;
+            let row_token = opener
+                .and_then(|_| last_row_token(tree.root_node(), text, row_start, newline_byte));
             let loader = |candidate: Language| (candidate == parser_language).then_some(query);
             // Tree-sitter includes matches whose nodes enclose this range, so
             // ancestor indentation survives without visiting unrelated bodies.
-            let mut iter = QueryMatchIter::<_, ()>::new(
-                &self.syntax,
-                rope_slice(text),
-                loader,
-                byte_range.clone(),
-            );
+            // The range reaches back only to the row's last token, never to
+            // the start of an arbitrarily long row.
+            let scan = row_token.as_ref().map_or(byte_range.clone(), |token| {
+                token.start.min(newline_byte)..byte_range.end
+            });
+            let mut iter =
+                QueryMatchIter::<_, ()>::new(&self.syntax, rope_slice(text), loader, scan);
             let mut seen = std::collections::HashSet::new();
             let mut begin_levels = 0usize;
             let mut always_levels = 0usize;
@@ -2346,6 +2368,7 @@ impl DocumentSyntax {
             // level, so openings are deduplicated by node alone.
             let mut opening = std::collections::HashSet::new();
             let mut opening_tab = std::collections::HashSet::new();
+            let mut ends_with_opener = false;
             let starts_on_newline_row = |node: &Node| {
                 checked_byte_to_char(text, node.start_byte() as usize)
                     .map(|offset| text.position_of(offset).row == newline_row)
@@ -2395,6 +2418,11 @@ impl DocumentSyntax {
                         }
                     }
                 }
+                if let (Some(capture), Some(token)) = (opener, &row_token) {
+                    for node in captured_match.nodes_for_capture(capture) {
+                        ends_with_opener |= node.end_byte() == token.end;
+                    }
+                }
                 if let Some(capture) = tab {
                     for node in captured_match.nodes_for_capture(capture) {
                         let key = (2u8, node.start_byte(), node.end_byte());
@@ -2429,6 +2457,7 @@ impl DocumentSyntax {
                 tab_levels: tab_levels.min(INDENT_LEVEL_LIMIT) as u16,
                 opening_levels: opening.len().min(INDENT_LEVEL_LIMIT) as u16,
                 opening_tab_levels: opening_tab.len().min(INDENT_LEVEL_LIMIT) as u16,
+                ends_with_opener,
                 issues,
                 truncated,
                 document: self.document,
@@ -3374,6 +3403,40 @@ fn push_span(
         return;
     }
     spans.push(Span { from, to, scope });
+}
+
+/// The byte range of the last token on a row, past trailing whitespace and
+/// comments.
+///
+/// Comments and other extras are stepped over a bounded number of times, so
+/// `{ // note` still ends with its brace. `None` means the row holds no token
+/// before its newline, or only extras within the bound.
+fn last_row_token(
+    root: Node<'_>,
+    text: &Text,
+    row_start: u32,
+    newline: u32,
+) -> Option<std::ops::Range<u32>> {
+    let rope = text.rope();
+    let mut end = newline;
+    for _ in 0..ROW_TOKEN_EXTRA_LIMIT {
+        while end > row_start && matches!(rope.byte(end as usize - 1), b' ' | b'\t' | b'\r') {
+            end -= 1;
+        }
+        if end <= row_start {
+            return None;
+        }
+        let token = root.descendant_for_byte_range(end - 1, end)?;
+        // A comment's own parts are not extras; the comment around them is.
+        let extra = std::iter::successors(Some(token.clone()), Node::parent)
+            .take(ROW_TOKEN_EXTRA_LIMIT)
+            .find(Node::is_extra);
+        match extra {
+            None => return Some(token.byte_range()),
+            Some(extra) => end = extra.start_byte().clamp(row_start, end - 1),
+        }
+    }
+    None
 }
 
 fn rope_slice(text: &Text) -> RopeSlice<'_> {
@@ -4432,7 +4495,12 @@ mod tests {
                     definition,
                     None,
                     definition.indentation,
-                    &["indent.begin", "indent.always", "indent.tab"],
+                    &[
+                        "indent.begin",
+                        "indent.always",
+                        "indent.tab",
+                        "indent.opener",
+                    ],
                 )
                 .unwrap_or_else(|error| panic!("{} indentation query: {error}", definition.name));
             }
