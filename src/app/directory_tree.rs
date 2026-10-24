@@ -352,9 +352,9 @@ impl App {
         }
         self.activate_pane(pane);
         if let Some(axis) = split {
-            self.split(axis, Some(path))?;
+            self.split_document(axis, path)?;
         } else {
-            self.open_file(path)?;
+            self.open_document(path)?;
         }
         self.directory_tree.focused = false;
         if self.prompt_kind != PromptKind::ExternalProgram {

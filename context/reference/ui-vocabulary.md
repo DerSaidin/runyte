@@ -138,7 +138,11 @@ them, regardless of which extensibility direction is chosen.
 - **Rendered page** — a generated read-only buffer holding a document as it is
   meant to be read rather than as it is written. `?` renders the active
   Markdown document into one and returns from it to the source; both stay open,
-  and the page is regenerated from the buffer, so it shows unsaved work. Its
+  and the page is regenerated from the buffer, so it shows unsaved work. A
+  pane's buffer history records which of the two it last showed, and opening
+  the document by name returns to that one; positional requests open the
+  source. The page lives exactly as long as its document: it closes with it
+  and is not subject to detached special-buffer retention. Its
   markers are absent because they were never written into it: nothing is
   concealed, and a row and a column in the page mean what they say. Like every
   generated page it carries semantic colour spans over ordinary buffer offsets,

@@ -200,6 +200,7 @@ mod indentation;
 mod jump_word_viewport;
 mod language;
 mod markdown_list_continuation;
+mod markdown_page_memory;
 mod markdown_positions;
 mod markdown_tables;
 mod mouse_autoscroll;

@@ -598,6 +598,8 @@ impl App {
         }
         if let Some(id) = terminal {
             self.move_terminal_to_pane(id, pane_id);
+        } else {
+            self.refresh_markdown_page(target.buffer);
         }
         self.mode = Mode::Normal;
         self.status(if backward {
