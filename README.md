@@ -119,7 +119,12 @@ Workspace
 +-- Other open buffers and terminals, ready to switch to
 ```
 
-Use `Ctrl-w ...` commands to manage panes.
+Use `Space w ...` or `Ctrl-w ...` commands to manage panes. Move the active
+pane to the left/bottom/top/right edge of the layout with `Ctrl-w H/J/K/L`.
+With the mouse, drag shared borders to resize panes, Alt-left-drag inside a
+pane to rearrange it, or Shift-Alt-left-drag to expand it into neighbouring
+panes. See [pane management](docs/user-guide.md#pane-keys) for details.
+
 Use `Space d t` to toggle a narrow directory tree at the left of the editor,
 or `Space d d` to reveal the active file and focus the tree. Enter opens a
 selected file directly, or asks for a numbered destination when several panes
