@@ -210,3 +210,148 @@ fn preview_theme_setting_reaches_frames_live_without_recapturing() {
         assert_eq!(frame.editor.panes[0].preview.as_ref(), Some(&capture));
     }
 }
+
+fn preview_test_geometry() -> FrameGeometry {
+    crate::ui::frame_geometry(ratatui::layout::Rect::new(0, 0, 100, 32))
+}
+
+#[test]
+fn clicking_a_native_preview_focuses_without_changing_source_selection() {
+    let root = TestRuntimeRoot::new("preview-focus").unwrap();
+    let mut app = App::new_in_project(Config::default(), None, &*root).unwrap();
+    app.native_media = true;
+    seed(&mut app, "one two three\n");
+    app.active_mut()
+        .replace_selection(Selection::single(Range::new(1, 4)));
+    app.execute(parse_colon_command("preview").unwrap())
+        .unwrap();
+    let pane = app.active_pane;
+    let selection = app.active().selection.clone();
+    let capture = app.document_previews[&pane].clone();
+    app.execute(parse_colon_command("vsplit").unwrap()).unwrap();
+    let mut host = crate::workspace::WorkspaceHost::new(app);
+    let frame = host.prepare_frame(preview_test_geometry());
+    let body = frame
+        .editor
+        .panes
+        .iter()
+        .find(|p| p.pane_id == pane)
+        .unwrap()
+        .body;
+    let event = PointerEvent {
+        kind: PointerEventKind::Down(PointerButton::Left),
+        column: body.x + 6,
+        row: body.y,
+        modifiers: Modifiers::NONE,
+    };
+    host.execute(crate::workspace::HostCommand::Pointer {
+        event,
+        frame: frame.id,
+        repetitions: 1,
+    })
+    .unwrap();
+    assert_eq!(host.active_pane, pane);
+    assert_eq!(host.active().selection, selection);
+    assert!(host.pointer_drag.is_none());
+    assert_eq!(host.document_previews[&pane], capture);
+    let frame = host.prepare_frame(preview_test_geometry());
+    assert_eq!(
+        frame
+            .editor
+            .panes
+            .iter()
+            .find(|p| p.pane_id == pane)
+            .unwrap()
+            .preview
+            .as_ref(),
+        Some(&capture)
+    );
+
+    // A terminal attachment retains the capture but displays editable source.
+    host.native_media = false;
+    host.execute(crate::workspace::HostCommand::Pointer {
+        event,
+        frame: frame.id,
+        repetitions: 1,
+    })
+    .unwrap();
+    assert_ne!(host.active().selection, selection);
+}
+
+#[test]
+fn keyboard_and_pointer_swaps_keep_each_preview_with_its_source() {
+    for pointer_swap in [false, true] {
+        for captures in [0, 1, 2, 3] {
+            let root = TestRuntimeRoot::new("preview-swap").unwrap();
+            let mut app = App::new_in_project(Config::default(), None, &*root).unwrap();
+            app.native_media = true;
+            let mut ids = Vec::new();
+            for (index, text) in ["first source", "second source"].iter().enumerate() {
+                if index == 1 {
+                    app.execute(parse_colon_command("vsplit").unwrap()).unwrap();
+                }
+                let path = root.join(format!("{index}.txt"));
+                fs::write(&path, text).unwrap();
+                app.open_file(path).unwrap();
+                ids.push(app.active_pane);
+                if captures & (1 << index) != 0 {
+                    app.execute(parse_colon_command("preview").unwrap())
+                        .unwrap();
+                }
+            }
+            let before = app.document_previews.clone();
+            let mut host = crate::workspace::WorkspaceHost::new(app);
+            if pointer_swap {
+                let frame = host.prepare_frame(preview_test_geometry());
+                let middle = |id| {
+                    let body = frame
+                        .editor
+                        .panes
+                        .iter()
+                        .find(|p| p.pane_id == id)
+                        .unwrap()
+                        .body;
+                    (body.x + body.width / 2, body.y + body.height / 2)
+                };
+                let start = middle(ids[1]);
+                let target = middle(ids[0]);
+                for (kind, (column, row)) in [
+                    (PointerEventKind::Down(PointerButton::Left), start),
+                    (PointerEventKind::Drag(PointerButton::Left), target),
+                    (PointerEventKind::Up(PointerButton::Left), target),
+                ] {
+                    let frame = host.prepare_frame(preview_test_geometry());
+                    host.execute(crate::workspace::HostCommand::Pointer {
+                        event: PointerEvent {
+                            kind,
+                            column,
+                            row,
+                            modifiers: Modifiers::ALT,
+                        },
+                        frame: frame.id,
+                        repetitions: 1,
+                    })
+                    .unwrap();
+                }
+            } else {
+                key(&mut host, KeyCode::Char('w'), Modifiers::CONTROL);
+                press(&mut host, 'x');
+            }
+            assert_eq!(host.active_pane, ids[0]);
+            let frame = host.prepare_frame(preview_test_geometry());
+            for (destination, source) in [(ids[0], ids[1]), (ids[1], ids[0])] {
+                let pane = frame
+                    .editor
+                    .panes
+                    .iter()
+                    .find(|p| p.pane_id == destination)
+                    .unwrap();
+                assert_eq!(pane.preview.as_ref(), before.get(&source));
+                assert_eq!(
+                    host.document_previews.get(&destination),
+                    before.get(&source)
+                );
+            }
+        }
+    }
+}

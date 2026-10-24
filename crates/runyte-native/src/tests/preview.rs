@@ -428,3 +428,142 @@ fn authored_pages_keep_a_white_layer_under_a_themed_editor() {
     };
     assert!(page_palette(&light, Some(Ok(&output))).is_none());
 }
+
+fn pointer_fixture() -> (super::Views, super::Pane, super::CellMetrics) {
+    let mut views = super::Views::default();
+    views.states.insert(
+        1,
+        State {
+            request: Some(Request {
+                text: "source".into(),
+                language: "text".into(),
+                path: None,
+                selection_only: false,
+                width: 1080,
+                height: 800,
+                scale: 1.0,
+                zoom: 1.0,
+                scroll: [0.0; 2],
+                selection: None,
+                adjacent: true,
+                theme: None,
+            }),
+            cache: Some(Arc::new(cached_output())),
+            zoom: 1.0,
+            cancel: None,
+            generation: 1,
+            serial: 0,
+            output: None,
+            scroll: [0.0; 2],
+            selection: None,
+            dragging: false,
+            hidden: false,
+            keys: Default::default(),
+        },
+    );
+    let pane = super::Pane {
+        pane: 1,
+        active: true,
+        body: runyte::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 40,
+        },
+        document: runyte::document_preview::DocumentPreview {
+            generation: 1,
+            source: 0,
+            text: "source".into(),
+            selection_only: false,
+            language: "text".into(),
+            path: None,
+        },
+        palette: None,
+    };
+    (views, pane, super::CellMetrics::new(15))
+}
+
+#[test]
+fn inactive_preview_forwards_only_focus_press_and_respects_overlays() {
+    use super::{PointerResult, point, px};
+    let (mut views, mut pane, metrics) = pointer_fixture();
+    let position = point(px(20.0), px(30.0));
+    assert_eq!(
+        views.pointer(Some(&pane), true, position, metrics, 0),
+        PointerResult::Changed
+    );
+    let selection = views.states[&1].selection;
+    pane.active = false;
+    assert_eq!(
+        views.pointer(Some(&pane), true, position, metrics, 0),
+        PointerResult::Forward
+    );
+    assert_eq!(views.states[&1].selection, selection);
+    assert!(!views.states[&1].dragging);
+    for phase in [1, 2] {
+        assert_eq!(
+            views.pointer(Some(&pane), true, position, metrics, phase),
+            PointerResult::Consumed
+        );
+    }
+    assert_eq!(
+        views.pointer(Some(&pane), false, position, metrics, 0),
+        PointerResult::Consumed
+    );
+    assert_eq!(views.states[&1].selection, selection);
+}
+
+#[test]
+fn preview_release_outside_body_or_over_another_pane_ends_selection() {
+    use super::{PointerResult, point, px};
+    for other_pane in [false, true] {
+        let (mut views, pane, metrics) = pointer_fixture();
+        let start = point(px(20.0), px(30.0));
+        let end = point(px(90.0), px(60.0));
+        assert_eq!(
+            views.pointer(Some(&pane), true, start, metrics, 0),
+            PointerResult::Changed
+        );
+        assert_eq!(
+            views.pointer(Some(&pane), true, end, metrics, 1),
+            PointerResult::Changed
+        );
+        let selection = views.states[&1].selection;
+        let mut other = pane.clone();
+        other.pane = 2;
+        other.active = false;
+        views.states.insert(2, State::default());
+        views.pointer(other_pane.then_some(&other), true, end, metrics, 2);
+        assert!(!views.states[&1].dragging);
+        assert_eq!(
+            views.pointer(Some(&pane), true, start, metrics, 1),
+            PointerResult::Consumed
+        );
+        assert_eq!(views.states[&1].selection, selection);
+        assert!(views.states[&2].selection.is_none());
+    }
+}
+
+#[test]
+fn cancelling_preview_capture_preserves_selection_and_stops_later_motion() {
+    use super::{PointerResult, point, px};
+    let (mut views, pane, metrics) = pointer_fixture();
+    let start = point(px(20.0), px(30.0));
+    let end = point(px(90.0), px(60.0));
+    views.pointer(Some(&pane), true, start, metrics, 0);
+    views.pointer(Some(&pane), true, end, metrics, 1);
+    let selection = views.states[&1].selection;
+    // Focus loss and buttonless motion use the same capture cancellation.
+    views.cancel_drag();
+    assert!(!views.states[&1].dragging);
+    assert_eq!(
+        views.pointer(Some(&pane), true, start, metrics, 1),
+        PointerResult::Consumed
+    );
+    assert_eq!(views.states[&1].selection, selection);
+    assert_eq!(
+        views.pointer(Some(&pane), true, start, metrics, 0),
+        PointerResult::Changed
+    );
+    assert!(views.states[&1].dragging);
+}

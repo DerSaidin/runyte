@@ -450,7 +450,81 @@ fn render_request(
         image: Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])),
     })
 }
+#[derive(Debug, PartialEq)]
+enum PointerResult {
+    Forward,
+    Consumed,
+    Changed,
+}
+
 impl Views {
+    pub(super) fn cancel_drag(&mut self) {
+        for state in self.states.values_mut() {
+            state.dragging = false;
+        }
+    }
+
+    fn pointer(
+        &mut self,
+        pane: Option<&Pane>,
+        media_input: bool,
+        position: Point<Pixels>,
+        metrics: CellMetrics,
+        phase: u8,
+    ) -> PointerResult {
+        let captured = self
+            .states
+            .iter()
+            .find_map(|(id, state)| state.dragging.then_some(*id));
+        // Releases belong to the captured selection, even outside every body.
+        if phase == 0 || phase == 2 {
+            self.cancel_drag();
+        }
+        let Some(pane) = pane else {
+            return PointerResult::Forward;
+        };
+        if !media_input {
+            return PointerResult::Consumed;
+        }
+        if !pane.active {
+            // The host recognizes the capture and applies this press as focus only.
+            return if phase == 0 {
+                PointerResult::Forward
+            } else {
+                PointerResult::Consumed
+            };
+        }
+        let state = self.states.get_mut(&pane.pane).unwrap();
+        // Do not select against stale raster geometry after scrolling/resizing.
+        if phase == 0
+            && !state.request.as_ref().is_some_and(|request| {
+                state.cache.as_ref().is_some_and(|cache| {
+                    cache.matches(request) && cache.covers(state.scroll, false)
+                }) || state.output.as_ref().is_some_and(|result| {
+                    result.as_ref().is_ok_and(|output| {
+                        output.matches(request) && output.reply.scroll == state.scroll
+                    })
+                })
+            })
+        {
+            return PointerResult::Consumed;
+        }
+        let point = [
+            f32::from(position.x) - pane.body.x as f32 * metrics.width,
+            f32::from(position.y) - pane.body.y as f32 * metrics.height,
+        ];
+        if phase == 0 {
+            state.selection = Some([point, point]);
+            state.dragging = true;
+        } else if captured == Some(pane.pane) {
+            if let Some(selection) = &mut state.selection {
+                selection[1] = point;
+            }
+        } else {
+            return PointerResult::Consumed;
+        }
+        PointerResult::Changed
+    }
     fn worker(&mut self, bridge: &Arc<Bridge>) -> &mpsc::SyncSender<Job> {
         if self.worker.is_none() {
             let (tx, rx) = mpsc::sync_channel::<Job>(8);
@@ -584,6 +658,9 @@ impl NativeView {
                     selection: None,
                     dragging: false,
                 };
+            }
+            if !pane.active || !frame.media_input {
+                state.dragging = false;
             }
             !state.hidden
         });
@@ -763,47 +840,18 @@ impl NativeView {
         phase: u8,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(pane) = self.preview_at(position) else {
-            return false;
-        };
-        if !pane.active || !self.frame.as_ref().is_some_and(|f| f.media_input) {
-            return true;
+        let pane = self.preview_at(position);
+        let result = self.previews.pointer(
+            pane.as_ref(),
+            self.frame.as_ref().is_some_and(|f| f.media_input),
+            position,
+            self.metrics,
+            phase,
+        );
+        if result == PointerResult::Changed {
+            cx.notify();
         }
-        let state = self.previews.states.get_mut(&pane.pane).unwrap();
-        // A resized or scrolled old raster may remain visible while its replacement
-        // is prepared. Do not start a selection against geometry not yet displayed.
-        if phase == 0
-            && !state.request.as_ref().is_some_and(|request| {
-                state.cache.as_ref().is_some_and(|cache| {
-                    cache.matches(request) && cache.covers(state.scroll, false)
-                }) || state.output.as_ref().is_some_and(|result| {
-                    result.as_ref().is_ok_and(|output| {
-                        output.matches(request) && output.reply.scroll == state.scroll
-                    })
-                })
-            })
-        {
-            return true;
-        }
-        let point = [
-            f32::from(position.x) - pane.body.x as f32 * self.metrics.width,
-            f32::from(position.y) - pane.body.y as f32 * self.metrics.height,
-        ];
-        if phase == 0 {
-            state.selection = Some([point, point]);
-            state.dragging = true;
-        } else if state.dragging {
-            if let Some(selection) = &mut state.selection {
-                selection[1] = point;
-            }
-            if phase == 2 {
-                state.dragging = false;
-            }
-        } else {
-            return true;
-        }
-        cx.notify();
-        true
+        result != PointerResult::Forward
     }
     pub(super) fn preview_scroll(
         &mut self,

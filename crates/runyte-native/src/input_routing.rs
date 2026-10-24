@@ -183,6 +183,12 @@ impl super::NativeView {
                 );
             }
             let cancelled = matches!(input.event, Event::FocusLost);
+            if cancelled
+                || matches!(&action, RoutingAction::Move(event) if event.pressed_button != Some(MouseButton::Left))
+                || (!current && matches!(&action, RoutingAction::Up(_)))
+            {
+                self.previews.cancel_drag();
+            }
             if !self.routing.editor_pane_gesture(&input) && !cancelled {
                 match action {
                     RoutingAction::Direct => {

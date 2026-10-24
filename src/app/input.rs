@@ -1201,6 +1201,17 @@ impl App {
                     return Ok(PointerOutcome::Changed);
                 };
                 self.activate_pane_from_pointer(pane_id);
+                // Native preview clicks focus the pane without placing a caret
+                // in the source text hidden underneath its document surface.
+                if self.native_media
+                    && self
+                        .document_previews
+                        .get(&pane_id)
+                        .is_some_and(|preview| preview.source == self.panes[&pane_id].buffer)
+                {
+                    self.pointer_drag = None;
+                    return Ok(PointerOutcome::Changed);
+                }
                 if let Some(terminal) = self.terminal_of_pane(pane_id) {
                     // Live cells still belong to the child. Once review has
                     // captured them, however, they are an immutable

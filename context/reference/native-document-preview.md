@@ -31,6 +31,11 @@ to the same source/pane or reattaching can reopen an undismissed host capture
 with fresh presentation state. Escape, `q` and editing-key exits remove the
 matching pane/generation capture from the host, so dismissal survives workspace
 switches and reattachment. Captures are host memory, not saved persistent state.
+
+Clicking an inactive preview focuses its pane without moving the source selection.
+A preview text drag ends on release anywhere, buttonless motion, or focus loss.
+Pane swaps transfer captures with their source contents, including swaps made by
+Alt-drag; native presentation state is rebuilt at the destination pane.
 Terminal clients retain source and report that the command requires the native
 window.
 

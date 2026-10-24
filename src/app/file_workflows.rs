@@ -2909,6 +2909,15 @@ impl App {
         self.panes.insert(active, previous_content);
         self.panes.insert(previous, active_content);
 
+        let active_preview = self.document_previews.remove(&active);
+        let previous_preview = self.document_previews.remove(&previous);
+        if let Some(preview) = active_preview {
+            self.document_previews.insert(previous, preview);
+        }
+        if let Some(preview) = previous_preview {
+            self.document_previews.insert(active, preview);
+        }
+
         if let Some(presentation) = self.search_selection.as_mut() {
             if presentation.pane == active {
                 presentation.pane = previous;
