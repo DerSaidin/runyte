@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+mod expand;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Axis {
     Horizontal,

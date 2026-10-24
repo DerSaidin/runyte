@@ -34,8 +34,9 @@ impl<T> Queue<T> {
             Event::Mouse(event) => match event.kind {
                 MouseEventKind::Down(button) => {
                     self.pane_gesture = (button == MouseButton::Left
-                        && event.modifiers == KeyModifiers::ALT)
-                        .then_some(input.attachment);
+                        && [KeyModifiers::ALT, KeyModifiers::ALT | KeyModifiers::SHIFT]
+                            .contains(&event.modifiers))
+                    .then_some(input.attachment);
                     self.pane_gesture.is_some()
                 }
                 MouseEventKind::Up(_) => self.pane_gesture.take().is_some(),

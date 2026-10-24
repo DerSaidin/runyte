@@ -408,100 +408,102 @@ fn releasing_a_pane_over_the_directory_sidebar_cancels_the_drag() {
 
 #[test]
 fn refused_and_cancelled_pane_gestures_never_report_an_unmatched_terminal_release() {
-    for state in ["single", "maximized", "cancelled", "semantic"] {
-        let mut app = wide_top_over_two_columns();
-        app.active_pane = 1;
-        if state == "single" {
-            app.layout = Layout::Pane(1);
-            app.panes.retain(|id, _| *id == 1);
-        } else if state == "maximized" {
-            window_keys(
+    for modifiers in [Modifiers::ALT, Modifiers::ALT | Modifiers::SHIFT] {
+        for state in ["single", "maximized", "cancelled", "semantic"] {
+            let mut app = wide_top_over_two_columns();
+            app.active_pane = 1;
+            if state == "single" {
+                app.layout = Layout::Pane(1);
+                app.panes.retain(|id, _| *id == 1);
+            } else if state == "maximized" {
+                window_keys(
+                    &mut app,
+                    &[
+                        (' ', Modifiers::NONE),
+                        ('w', Modifiers::NONE),
+                        ('f', Modifiers::NONE),
+                    ],
+                );
+            }
+            let terminal = app.terminals.insert_test_session(78, 28);
+            app.panes.get_mut(&1).unwrap().terminal = Some(terminal);
+            app.apply_terminal_output(TerminalOutput::Bytes {
+                id: terminal,
+                bytes: b"\x1b[?1003h\x1b[?1006h".to_vec(),
+            });
+            let body = app.prepare_view(geometry()).pane(1).unwrap().body;
+            let (column, row) = (body.x + 3, body.y + 3);
+            let generation = app.terminals.get(terminal).unwrap().input_generation();
+            pointer(
                 &mut app,
-                &[
-                    (' ', Modifiers::NONE),
-                    ('w', Modifiers::NONE),
-                    ('f', Modifiers::NONE),
-                ],
+                PointerEventKind::Down(PointerButton::Left),
+                column,
+                row,
+                modifiers,
             );
-        }
-        let terminal = app.terminals.insert_test_session(78, 28);
-        app.panes.get_mut(&1).unwrap().terminal = Some(terminal);
-        app.apply_terminal_output(TerminalOutput::Bytes {
-            id: terminal,
-            bytes: b"\x1b[?1003h\x1b[?1006h".to_vec(),
-        });
-        let body = app.prepare_view(geometry()).pane(1).unwrap().body;
-        let (column, row) = (body.x + 3, body.y + 3);
-        let generation = app.terminals.get(terminal).unwrap().input_generation();
-        pointer(
-            &mut app,
-            PointerEventKind::Down(PointerButton::Left),
-            column,
-            row,
-            Modifiers::ALT,
-        );
-        // Passive motion must also remain editor-owned with any-motion reporting.
-        pointer(
-            &mut app,
-            PointerEventKind::Moved,
-            column,
-            row,
-            Modifiers::NONE,
-        );
-        assert_eq!(
-            app.terminals.get(terminal).unwrap().input_generation(),
-            generation,
-            "press and passive motion: {state}"
-        );
-        if state == "cancelled" {
-            key(&mut app, KeyCode::Escape, Modifiers::NONE);
-        } else if state == "semantic" {
-            app.execute(
-                CommandInvocation::editor(
-                    EditorCommand::EqualizeWindows,
-                    CommandExecutionContext::default(),
+            // Passive motion must also remain editor-owned with any-motion reporting.
+            pointer(
+                &mut app,
+                PointerEventKind::Moved,
+                column,
+                row,
+                Modifiers::NONE,
+            );
+            assert_eq!(
+                app.terminals.get(terminal).unwrap().input_generation(),
+                generation,
+                "press and passive motion: {state}"
+            );
+            if state == "cancelled" {
+                key(&mut app, KeyCode::Escape, Modifiers::NONE);
+            } else if state == "semantic" {
+                app.execute(
+                    CommandInvocation::editor(
+                        EditorCommand::EqualizeWindows,
+                        CommandExecutionContext::default(),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .unwrap();
+                .unwrap();
+            }
+            // A key may itself be legitimate terminal input. The remainder of
+            // the cancelled pointer gesture must not add any mouse reports.
+            let generation = app.terminals.get(terminal).unwrap().input_generation();
+            pointer(
+                &mut app,
+                PointerEventKind::Drag(PointerButton::Left),
+                column + 1,
+                row,
+                Modifiers::NONE,
+            );
+            pointer(
+                &mut app,
+                PointerEventKind::Moved,
+                column,
+                row,
+                Modifiers::NONE,
+            );
+            release(&mut app, column, row);
+            assert!(app.pointer_drag.is_none(), "{state}");
+            assert!(!app.pane_pointer_owned, "{state}");
+            assert_eq!(
+                app.terminals.get(terminal).unwrap().input_generation(),
+                generation,
+                "{state}"
+            );
+            pointer(
+                &mut app,
+                PointerEventKind::Down(PointerButton::Left),
+                column,
+                row,
+                Modifiers::NONE,
+            );
+            assert!(
+                app.terminals.get(terminal).unwrap().input_generation() > generation,
+                "next ordinary press still reaches the child: {state}"
+            );
+            close_test_terminals(&mut app);
         }
-        // A key may itself be legitimate terminal input. The remainder of
-        // the cancelled pointer gesture must not add any mouse reports.
-        let generation = app.terminals.get(terminal).unwrap().input_generation();
-        pointer(
-            &mut app,
-            PointerEventKind::Drag(PointerButton::Left),
-            column + 1,
-            row,
-            Modifiers::NONE,
-        );
-        pointer(
-            &mut app,
-            PointerEventKind::Moved,
-            column,
-            row,
-            Modifiers::NONE,
-        );
-        release(&mut app, column, row);
-        assert!(app.pointer_drag.is_none(), "{state}");
-        assert!(!app.pane_pointer_owned, "{state}");
-        assert_eq!(
-            app.terminals.get(terminal).unwrap().input_generation(),
-            generation,
-            "{state}"
-        );
-        pointer(
-            &mut app,
-            PointerEventKind::Down(PointerButton::Left),
-            column,
-            row,
-            Modifiers::NONE,
-        );
-        assert!(
-            app.terminals.get(terminal).unwrap().input_generation() > generation,
-            "next ordinary press still reaches the child: {state}"
-        );
-        close_test_terminals(&mut app);
     }
 }
 
@@ -516,4 +518,172 @@ fn losing_pointer_capture_clears_the_drop_outline_without_moving() {
     assert!(drop_preview(&mut app).is_none());
     assert_eq!(area(&mut app, 1), before);
     assert!(!app.cancel_pointer_drag());
+}
+
+fn start_expansion(app: &mut App, pane: usize, column: u16, row: u16) {
+    let body = app.prepare_view(geometry()).pane(pane).unwrap().body;
+    pointer(
+        app,
+        PointerEventKind::Down(PointerButton::Left),
+        body.x + body.width / 2,
+        body.y + body.height / 2,
+        Modifiers::ALT | Modifiers::SHIFT,
+    );
+    // The press owns the gesture even after both modifiers are released.
+    pointer(
+        app,
+        PointerEventKind::Drag(PointerButton::Left),
+        column,
+        row,
+        Modifiers::NONE,
+    );
+}
+
+#[test]
+fn shift_alt_drag_extends_through_the_requested_three_layouts() {
+    let mut app = wide_top_over_two_columns();
+    app.native_media = true;
+    app.active_pane = 2;
+    app.active_mut()
+        .replace_selection(Selection::single(Range::new(1, 4)));
+    app.execute(parse_colon_command("preview").unwrap())
+        .unwrap();
+    let selected = app.active().selection.clone();
+    let capture = app.document_previews[&2].clone();
+    let buffer = app.active().buffer;
+    let text = app.buffers[buffer].to_string();
+    let dirty = app.buffers[buffer].dirty;
+
+    start_expansion(&mut app, 2, 60, 5);
+    assert_eq!(drop_preview(&mut app), Some(full(40, 0, 40, 30)));
+    assert_eq!(
+        area(&mut app, 0),
+        full(0, 0, 80, 15),
+        "motion only previews"
+    );
+    release(&mut app, 60, 5);
+    assert_eq!(area(&mut app, 0), full(0, 0, 40, 15));
+    assert_eq!(area(&mut app, 1), full(0, 15, 40, 15));
+    assert_eq!(area(&mut app, 2), full(40, 0, 40, 30));
+    assert_eq!(app.active_pane, 2);
+    assert_eq!(app.active().selection, selected);
+    assert_eq!(app.document_previews[&2], capture);
+
+    start_expansion(&mut app, 1, 60, 20);
+    assert_eq!(drop_preview(&mut app), Some(full(0, 15, 80, 15)));
+    release(&mut app, 60, 20);
+    assert_eq!(area(&mut app, 0), full(0, 0, 40, 15));
+    assert_eq!(area(&mut app, 2), full(40, 0, 40, 15));
+    assert_eq!(area(&mut app, 1), full(0, 15, 80, 15));
+
+    start_expansion(&mut app, 1, 20, 5);
+    assert_eq!(drop_preview(&mut app), Some(full(0, 0, 80, 30)));
+    release(&mut app, 20, 5);
+    assert_eq!(app.active_pane, 1);
+    assert_eq!(app.panes.len(), 1);
+    assert_eq!(area(&mut app, 1), full(0, 0, 80, 30));
+    assert!(!app.document_previews.contains_key(&2));
+    assert!(!app.closed_buffers.contains(&buffer));
+    assert_eq!(app.buffers[buffer].to_string(), text);
+    assert_eq!(app.buffers[buffer].dirty, dirty);
+}
+
+#[test]
+fn expansion_can_be_cancelled_and_shared_borders_still_resize() {
+    for cancel in ["escape", "focus", "outside"] {
+        let mut app = wide_top_over_two_columns();
+        start_expansion(&mut app, 2, 60, 5);
+        assert!(drop_preview(&mut app).is_some());
+        match cancel {
+            "escape" => key(&mut app, KeyCode::Escape, Modifiers::NONE),
+            "focus" => {
+                app.cancel_pointer_drag();
+            }
+            _ => {}
+        }
+        release(
+            &mut app,
+            60,
+            if cancel == "outside" { HEIGHT + 1 } else { 5 },
+        );
+        assert_eq!(area(&mut app, 0), full(0, 0, 80, 15));
+        assert_eq!(area(&mut app, 2), full(40, 15, 40, 15));
+        assert_eq!(app.panes.len(), 3);
+        assert!(drop_preview(&mut app).is_none());
+    }
+    let mut app = wide_top_over_two_columns();
+    pointer(
+        &mut app,
+        PointerEventKind::Down(PointerButton::Left),
+        40,
+        20,
+        Modifiers::ALT | Modifiers::SHIFT,
+    );
+    assert!(matches!(app.pointer_drag, Some(PointerDrag::Resize { .. })));
+}
+
+#[test]
+fn expansion_closes_terminal_panes_without_stopping_their_sessions() {
+    let mut app = wide_top_over_two_columns();
+    let terminal = app.terminals.insert_test_session(38, 13);
+    app.panes.get_mut(&2).unwrap().terminal = Some(terminal);
+    app.apply_terminal_output(TerminalOutput::Bytes {
+        id: terminal,
+        bytes: b"\x1b[?1003h\x1b[?1006h".to_vec(),
+    });
+    let generation = app.terminals.get(terminal).unwrap().input_generation();
+    start_expansion(&mut app, 2, 60, 5);
+    release(&mut app, 60, 5);
+    assert_eq!(app.panes[&2].terminal, Some(terminal));
+    assert_eq!(
+        app.terminals.get(terminal).unwrap().input_generation(),
+        generation
+    );
+    start_expansion(&mut app, 0, 60, 5);
+    release(&mut app, 60, 5);
+    start_expansion(&mut app, 0, 60, 20);
+    release(&mut app, 60, 20);
+    assert!(!app.panes.contains_key(&2));
+    assert!(app.terminals.get(terminal).is_some());
+    close_test_terminals(&mut app);
+}
+
+#[test]
+fn extending_over_a_temporary_comparison_side_restores_the_source_like_window_close() {
+    use crate::git::{MemoryGitProvider, Repository};
+    for side in [Side::Left, Side::Right] {
+        let root = crate::test_support::TestRuntimeRoot::new("expand-comparison").unwrap();
+        let path = root.join("source.txt");
+        fs::write(&path, "working\n").unwrap();
+        let mut ports = HostPorts::isolated(Box::new(MemoryClipboard(Arc::new(Mutex::new(
+            String::new(),
+        )))));
+        ports.replace_git(Box::new(
+            MemoryGitProvider::new(Repository::new(&*root))
+                .with_staged("source.txt", "staged\n")
+                .with_working("source.txt", "working\n"),
+        ));
+        let mut app = App::new_in_isolated_project(&root, ports).unwrap();
+        app.open_file(path).unwrap();
+        let source = app.active().buffer;
+        for character in [' ', 'g', 'D'] {
+            press(&mut app, character);
+        }
+        let pane = app.diffs[0].side(side).pane;
+        let other = app.diffs[0]
+            .panes()
+            .into_iter()
+            .find(|id| *id != pane)
+            .unwrap();
+        let target = area(&mut app, other);
+        let (column, row) = (target.x + target.width / 2, target.y + target.height / 2);
+        start_expansion(&mut app, pane, column, row);
+        assert_eq!(drop_preview(&mut app), Some(full(0, 0, WIDTH, HEIGHT)));
+        release(&mut app, column, row);
+        assert_eq!(app.active_pane, pane);
+        assert_eq!(app.panes.len(), 1);
+        assert!(app.diffs.is_empty());
+        assert_eq!(app.active().buffer, source);
+        assert_eq!(app.active_buffer().to_string(), "working\n");
+    }
 }

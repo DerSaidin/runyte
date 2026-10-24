@@ -2838,6 +2838,7 @@ impl App {
         let layout = self.layout.clone().without(closing).unwrap();
         self.layout = layout;
         self.panes.remove(&closing);
+        self.document_previews.remove(&closing);
         self.areas.remove(&closing);
         self.pane_opened_at.remove(&closing);
         self.pane_activated_at.remove(&closing);

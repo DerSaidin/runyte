@@ -1878,6 +1878,7 @@ enum PointerDrag {
     /// An Alt-drag carrying `pane` to wherever it is released.
     MovePane {
         pane: usize,
+        expand: bool,
         drop: Option<pane_drag::PaneDrop>,
     },
 }

@@ -610,6 +610,7 @@ Mouse support needs a terminal with mouse reporting and `editor.mouse: true`
 | Wheel | Scroll the pane under the pointer |
 | Drag a shared border | Resize the split |
 | Alt-left-drag inside a pane | Rearrange panes using the [pane drop outline](#pane-keys) |
+| Shift-Alt-left-drag inside a pane | Extend the pane into neighbouring panes |
 | Right-click a selection | Copy all selections to the system clipboard, like `Space c y` |
 | Double-click a directory tree row | Toggle the directory or open the file, like Enter |
 
@@ -1718,6 +1719,7 @@ and pending key sequences retain their own bindings.
 | Ctrl-wheel (Cmd-wheel on macOS) | Zoom around the pointer |
 | Middle-drag or right-drag | Pan |
 | Alt-left-drag | Move the pane using the pane drop outline |
+| Shift-Alt-left-drag | Extend the pane into neighbouring panes |
 | Left-drag on PDF text | Select words in reading order |
 | Left-drag on an image | Pan; double-click toggles fit / 2× fit |
 | Shift-left-drag | Select a rectangular image region, including on PDFs |
@@ -2694,6 +2696,21 @@ Alt-left-press inside a terminal pane belongs to Runyte and is not forwarded
 to the child, even when the child requests mouse reporting. Pane moves preserve
 the pane's content and terminal session, and are unavailable while Zen or
 full-screen maximizes a pane.
+
+Hold Shift and Alt when starting a left-drag to **extend** the pane in place.
+Drag outside one of its sides: the outline snaps that side to the far edge
+of the pane under the pointer. Release to apply it, or press Escape to cancel.
+The other sides stay anchored. Neighbours shrink where they can remain one
+rectangle; covered panes, or panes that would be split into separate pieces,
+close as with `:wc`. Adjacent panes grow into any space left by those closures.
+Buffers, unsaved edits, and terminal sessions remain available. If the result
+cannot form a rectangular split layout, there is no outline and release leaves
+the layout unchanged. Shared borders still resize normally.
+
+For example, starting with `AA / BC`, extending C upward gives `AC / BC`;
+extending B right gives `AC / BB`; extending B upward leaves B filling the
+editor. With `AAA / BCD`, extending C upward closes A and grows B and D,
+leaving three full-height columns `BCD`.
 
 **Examples:**
 

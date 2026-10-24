@@ -6,6 +6,8 @@
 //! lays the pane along a side of the layout, splits another pane to make room
 //! for it, or swaps contents with another pane. Shared borders keep resizing
 //! whether Alt is held or not, so the two gestures never compete for a cell.
+//! Shift-Alt-drag instead extends the pane in place, shrinking or closing
+//! neighbours, with the same preview, cancellation and release ownership.
 
 use std::collections::HashMap;
 
@@ -33,6 +35,8 @@ pub(super) enum PaneDrop {
     },
     /// Into another pane's place, exchanging contents with it.
     Swap { target: usize },
+    /// Grow in place to this rectangle, shrinking or closing neighbours.
+    Expand { area: Rect },
 }
 
 impl App {
@@ -71,25 +75,25 @@ impl App {
     /// Returns whether the event belonged to one, in which case nothing else
     /// may interpret it: not even a terminal child that asked for the mouse.
     pub(super) fn handle_pane_drag(&mut self, event: PointerEvent, view: &PreparedView) -> bool {
-        if let Some(PointerDrag::MovePane { pane, .. }) = self.pointer_drag {
+        if let Some(PointerDrag::MovePane { pane, expand, .. }) = self.pointer_drag {
             match event.kind {
                 PointerEventKind::Drag(PointerButton::Left) => {
-                    let drop = self.pane_drop_at(view, pane, event.column, event.row);
-                    self.pointer_drag = Some(PointerDrag::MovePane { pane, drop });
+                    let drop = self.pane_drop_at(view, pane, expand, event.column, event.row);
+                    self.pointer_drag = Some(PointerDrag::MovePane { pane, expand, drop });
                     self.describe_pane_drop(drop);
                 }
                 PointerEventKind::Up(_) => {
                     self.pane_pointer_owned = false;
                     self.pointer_drag = None;
-                    let drop = self.pane_drop_at(view, pane, event.column, event.row);
-                    self.drop_pane(pane, drop);
+                    let drop = self.pane_drop_at(view, pane, expand, event.column, event.row);
+                    self.drop_pane(pane, drop, view.layout_area());
                 }
                 _ => {}
             }
             return true;
         }
         if event.kind != PointerEventKind::Down(PointerButton::Left)
-            || event.modifiers != Modifiers::ALT
+            || ![Modifiers::ALT, Modifiers::ALT | Modifiers::SHIFT].contains(&event.modifiers)
             || pointer_resize_pair(view, event.column, event.row).is_some()
         {
             return false;
@@ -113,7 +117,12 @@ impl App {
         }
         self.activate_pane_from_pointer(pane);
         self.dismiss_popups();
-        self.pointer_drag = Some(PointerDrag::MovePane { pane, drop: None });
+        let expand = event.modifiers.contains(Modifiers::SHIFT);
+        self.pointer_drag = Some(PointerDrag::MovePane {
+            pane,
+            expand,
+            drop: None,
+        });
         self.describe_pane_drop(None);
         true
     }
@@ -124,6 +133,7 @@ impl App {
         let Some(PointerDrag::MovePane {
             pane,
             drop: Some(drop),
+            ..
         }) = self.pointer_drag
         else {
             return None;
@@ -132,7 +142,7 @@ impl App {
             return view.pane(target).map(|prepared| prepared.area);
         }
         let mut layout = self.layout.clone();
-        if !apply_drop(&mut layout, pane, drop) {
+        if !apply_drop(&mut layout, pane, drop, view.layout_area()) {
             return None;
         }
         let mut areas = HashMap::new();
@@ -146,21 +156,36 @@ impl App {
         &self,
         view: &PreparedView,
         pane: usize,
+        expand: bool,
         column: u16,
         row: u16,
     ) -> Option<PaneDrop> {
-        let drop = drop_at(view, pane, column, row)?;
+        let drop = if expand {
+            expansion_at(view, pane, column, row)?
+        } else {
+            drop_at(view, pane, column, row)?
+        };
         if let PaneDrop::Swap { target } = drop {
             return self.panes.contains_key(&target).then_some(drop);
         }
-        apply_drop(&mut self.layout.clone(), pane, drop).then_some(drop)
+        apply_drop(&mut self.layout.clone(), pane, drop, view.layout_area()).then_some(drop)
     }
 
     /// Says on the status line what releasing the pane here would do.
     fn describe_pane_drop(&mut self, drop: Option<PaneDrop>) {
         let message = match drop {
+            None if matches!(
+                self.pointer_drag,
+                Some(PointerDrag::MovePane { expand: true, .. })
+            ) =>
+            {
+                "extending pane: drag into a neighbour; release to grow to its far edge".to_owned()
+            }
             None => "moving pane: release on a layout side, a pane's side, or a pane's middle"
                 .to_owned(),
+            Some(PaneDrop::Expand { .. }) => {
+                "release to extend pane; covered panes close".to_owned()
+            }
             Some(PaneDrop::Edge { axis, edge }) => {
                 format!("release to move pane to the {} edge", edge_name(axis, edge))
             }
@@ -173,7 +198,7 @@ impl App {
         self.status(message);
     }
 
-    fn drop_pane(&mut self, pane: usize, drop: Option<PaneDrop>) {
+    fn drop_pane(&mut self, pane: usize, drop: Option<PaneDrop>, layout_area: Rect) {
         let Some(drop) = drop else {
             self.status("pane left where it was");
             return;
@@ -188,6 +213,26 @@ impl App {
             PaneDrop::Edge { axis, edge } => self.move_pane_to_edge(axis, edge),
             PaneDrop::Beside { target, axis, edge } => self.move_pane_beside(target, axis, edge),
             PaneDrop::Swap { target } => self.swap_pane_contents(target),
+            PaneDrop::Expand { area } => {
+                let mut layout = self.layout.clone();
+                if !layout.expand_pane(pane, layout_area, area) {
+                    return;
+                }
+                let mut survivors = Vec::new();
+                layout.panes(&mut survivors);
+                let mut before = Vec::new();
+                self.layout.panes(&mut before);
+                for closing in before.into_iter().filter(|id| !survivors.contains(id)) {
+                    if !self.close_temporary_comparison(closing) {
+                        self.remove_pane(closing);
+                    }
+                }
+                self.layout = layout;
+                if self.active_pane != pane {
+                    self.activate_pane(pane);
+                }
+                self.status("extended pane");
+            }
         }
     }
 }
@@ -215,11 +260,12 @@ pub(super) fn edge_name(axis: Axis, edge: Edge) -> &'static str {
     }
 }
 
-fn apply_drop(layout: &mut Layout, pane: usize, drop: PaneDrop) -> bool {
+fn apply_drop(layout: &mut Layout, pane: usize, drop: PaneDrop, area: Rect) -> bool {
     match drop {
         PaneDrop::Edge { axis, edge } => layout.move_to_edge(pane, axis, edge),
         PaneDrop::Beside { target, axis, edge } => layout.move_beside(pane, target, axis, edge),
         PaneDrop::Swap { target } => target != pane,
+        PaneDrop::Expand { area: target } => layout.expand_pane(pane, area, target),
     }
 }
 
@@ -271,4 +317,68 @@ fn drop_at(view: &PreparedView, dragged: usize, column: u16, row: u16) -> Option
     } else {
         PaneDrop::Swap { target }
     })
+}
+
+/// Stretch one side of the original pane to the far edge of the pane under
+/// the pointer. Diagonal motion uses the larger displacement relative to the
+/// original pane size, so terminal cell aspect ratios do not favour a direction.
+fn expansion_at(view: &PreparedView, dragged: usize, column: u16, row: u16) -> Option<PaneDrop> {
+    if !rect_contains(view.layout_area(), column, row) {
+        return None;
+    }
+    let source = view.pane(dragged)?.area;
+    if rect_contains(source, column, row) {
+        return None;
+    }
+    let target = view
+        .panes
+        .iter()
+        .find(|p| rect_contains(p.area, column, row))?
+        .area;
+    let right = source.x.saturating_add(source.width);
+    let bottom = source.y.saturating_add(source.height);
+    let directions = [
+        (
+            u32::from(source.x.saturating_sub(column)) * u32::from(source.height),
+            Axis::Horizontal,
+            Edge::Start,
+        ),
+        (
+            u32::from(column.saturating_add(1).saturating_sub(right)) * u32::from(source.height),
+            Axis::Horizontal,
+            Edge::End,
+        ),
+        (
+            u32::from(source.y.saturating_sub(row)) * u32::from(source.width),
+            Axis::Vertical,
+            Edge::Start,
+        ),
+        (
+            u32::from(row.saturating_add(1).saturating_sub(bottom)) * u32::from(source.width),
+            Axis::Vertical,
+            Edge::End,
+        ),
+    ];
+    let &(_, axis, edge) = directions.iter().max_by_key(|(distance, _, _)| distance)?;
+    let area = match (axis, edge) {
+        (Axis::Horizontal, Edge::Start) => Rect {
+            x: target.x,
+            width: right - target.x,
+            ..source
+        },
+        (Axis::Horizontal, Edge::End) => Rect {
+            width: target.x + target.width - source.x,
+            ..source
+        },
+        (Axis::Vertical, Edge::Start) => Rect {
+            y: target.y,
+            height: bottom - target.y,
+            ..source
+        },
+        (Axis::Vertical, Edge::End) => Rect {
+            height: target.y + target.height - source.y,
+            ..source
+        },
+    };
+    Some(PaneDrop::Expand { area })
 }

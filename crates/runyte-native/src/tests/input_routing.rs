@@ -283,3 +283,40 @@ fn focus_loss_clears_native_pane_capture() {
     assert!(!queue.editor_pane_gesture(&input));
     assert!(queue.pane_gesture.is_none());
 }
+
+#[test]
+fn shift_alt_expansion_bypasses_preview_and_media_until_release() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut queue: Queue = Queue::default();
+    let mut input = key('x', 1);
+    input.event = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::ALT | KeyModifiers::SHIFT,
+    });
+    assert!(queue.editor_pane_gesture(&input));
+    for kind in [
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        input.event = Event::Mouse(MouseEvent {
+            kind,
+            column: 8,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(queue.editor_pane_gesture(&input));
+    }
+    assert!(!queue.editor_pane_gesture(&key('x', 1)));
+    input.event = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::ALT | KeyModifiers::SHIFT | KeyModifiers::CONTROL,
+    });
+    assert!(
+        !queue.editor_pane_gesture(&input),
+        "extra modifiers do not claim a pane gesture"
+    );
+}

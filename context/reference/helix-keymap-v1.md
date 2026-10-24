@@ -332,6 +332,13 @@ pane leaves Insert mode, while a following drag still selects and enters Select
 mode. All document coordinates resolve through the prepared fold/wrap row
 projection; keyboard overlays retain input ownership while open.
 
+Alt-left-drag rearranges panes. Shift-Alt-left-drag extends the pane in place,
+snapping the growing side to existing pane edges. Covered or fragmented
+neighbours close like `:wc`; remaining neighbours resize to fill the editor.
+The drop outline previews the final rectangle, and Escape cancels either gesture.
+Shared borders retain ordinary resizing. Both gestures belong to the editor
+even over a terminal requesting mouse reports or a native document preview.
+
 | Sequence | Helix command | Runyte command | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `:file-picker-directory` | file picker at current working directory | `open-directory-file-picker` | Added · Primary | Recursively fuzzy-finds below the active file's parent or explorer root; a pathless/generated buffer falls back to the working directory. Ancestor ignore rules remain active down from the project root, while Git and Runyte runtime state cannot become scan roots. This deliberately follows buffer context rather than Helix's process working directory. It held `Space s F` and `Space F` until the `Space /` rewiring and now has no key. |
