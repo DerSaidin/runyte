@@ -663,7 +663,7 @@ fn extending_over_a_temporary_comparison_side_restores_the_source_like_window_cl
                 .with_staged("source.txt", "staged\n")
                 .with_working("source.txt", "working\n"),
         ));
-        let mut app = App::new_in_isolated_project(&root, ports).unwrap();
+        let mut app = App::new_in_isolated_project(&*root, ports).unwrap();
         app.open_file(path).unwrap();
         let source = app.active().buffer;
         for character in [' ', 'g', 'D'] {

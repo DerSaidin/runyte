@@ -3,9 +3,9 @@
 [![CI](https://github.com/runyte/runyte/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/runyte/runyte/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/badge/coverage-%E2%89%A589%25-brightgreen)](context/reference/test-coverage.md)
 
-https://github.com/user-attachments/assets/86edfda0-f8cb-4999-b35d-4f450f4ad3c3
+https://github.com/user-attachments/assets/5f039873-8232-4ad9-b089-0d54b2b05e85
 
-*[Watch the 40-second demo](https://runyte.com/videos/runyte-demo.mp4?v=acb069b9306f): modal editing, search, file navigation, terminals, Markdown, persistent sessions, and a four-pane workspace. Matrix → gruvbox.*
+*[Watch the 45-second demo](https://runyte.com/videos/runyte-demo.mp4?v=7b63a9df8e582e64): editing, terminals, Markdown, persistent sessions, and the desktop window with animated images, PDFs, and pane dragging.*
 
 Runyte is a fast modal text editor for focused work. Everything is accessed
 through keybindings. No need to remember them though — every keybinding sequence
