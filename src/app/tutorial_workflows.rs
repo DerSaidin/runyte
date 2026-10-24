@@ -8,11 +8,12 @@ impl App {
     pub(super) fn open_tutorial(&mut self, request: Option<&str>) -> Result<()> {
         let request = request.map(str::trim).filter(|value| !value.is_empty());
         if let Some(value) = request
-            && !matches!(value, "reset" | "sessions")
+            && !matches!(value, "reset" | "sessions" | "next")
         {
-            return Err(
-                CommandRefusal::routine("tutorial accepts only `reset` or `sessions`").into(),
-            );
+            return Err(CommandRefusal::routine(
+                "tutorial accepts only `reset`, `sessions`, or `next`",
+            )
+            .into());
         }
         if let Some(maximized) = self.maximized {
             return Err(CommandRefusal::routine(format!(
@@ -20,6 +21,21 @@ impl App {
                 maximized.view.label()
             ))
             .into());
+        }
+
+        if request == Some("next") {
+            if !self.tutorial_view_is_live() {
+                return Err(CommandRefusal::routine("open :tutorial first").into());
+            }
+            let state = self.tutorial.as_ref().unwrap();
+            if !state.exercise_complete {
+                return Err(CommandRefusal::routine(
+                    "complete the current tutorial exercise first",
+                )
+                .into());
+            }
+            self.advance_tutorial_lesson(state.lesson + 1);
+            return Ok(());
         }
 
         if self.tutorial.is_none() {
@@ -36,6 +52,7 @@ impl App {
             Some("reset") => {
                 let state = self.tutorial.as_mut().unwrap();
                 state.lesson = 0;
+                state.exercise_complete = false;
                 state.motion_hints = None;
                 state.awaiting_reattach = false;
                 state.explorer_buffer = None;
@@ -47,6 +64,7 @@ impl App {
             Some("sessions") => {
                 let state = self.tutorial.as_mut().unwrap();
                 state.lesson = crate::tutorial::LAST_LESSON;
+                state.exercise_complete = false;
                 state.motion_hints = Some(MotionHints::Both);
                 state.awaiting_reattach = false;
                 state.explorer_buffer = None;
@@ -90,6 +108,7 @@ impl App {
         self.active_mut().retarget(scratch_buffer);
         self.tutorial = Some(TutorialState {
             lesson: 0,
+            exercise_complete: false,
             motion_hints: None,
             instruction_buffer,
             scratch_buffer,
@@ -137,10 +156,17 @@ impl App {
             pane.replace_selection(Selection::point(0));
         }
         if matches!(lesson, 16 | 17) {
-            self.prepare_tutorial_jump_history(lesson);
+            // Rebuild history after visiting other buffers, preserving the
+            // completed destination rather than replaying the exercise setup.
+            let history_lesson = if state.exercise_complete {
+                if lesson == 16 { 17 } else { 16 }
+            } else {
+                lesson
+            };
+            self.prepare_tutorial_jump_history(history_lesson);
             return;
         }
-        if lesson == 12
+        if (lesson == 12 || (lesson == 11 && state.exercise_complete))
             && let Some(explorer) = explorer_buffer
         {
             if self.panes[&exercise_pane].buffer != explorer {
@@ -148,7 +174,7 @@ impl App {
             }
             return;
         }
-        if lesson == 14
+        if (lesson == 14 || (lesson == 13 && state.exercise_complete))
             && let Some(terminal) = tutorial_terminal
             && self.terminals.get(terminal).is_some()
         {
@@ -194,6 +220,7 @@ impl App {
         };
         state.motion_hints = Some(hints);
         state.lesson = 1;
+        state.exercise_complete = false;
         state.last_action = None;
         self.list = None;
         self.list_actions.clear();
@@ -219,7 +246,7 @@ impl App {
         let Some(state) = self.tutorial.as_ref() else {
             return;
         };
-        if state.motion_hints.is_none() || state.awaiting_reattach {
+        if state.motion_hints.is_none() || state.awaiting_reattach || state.exercise_complete {
             return;
         }
         let lesson = state.lesson;
@@ -320,7 +347,8 @@ impl App {
         if lesson == 11 {
             self.tutorial.as_mut().unwrap().explorer_buffer = Some(exercise_buffer);
         }
-        self.advance_tutorial_lesson(lesson + 1);
+        self.tutorial.as_mut().unwrap().exercise_complete = true;
+        self.refresh_tutorial_document();
     }
 
     fn advance_tutorial_lesson(&mut self, lesson: u8) {
@@ -335,6 +363,7 @@ impl App {
             lesson
         };
         state.lesson = lesson;
+        state.exercise_complete = false;
         state.last_action = None;
         match lesson {
             2 => self.reset_tutorial_scratch("alpha beta\n", 6, true),

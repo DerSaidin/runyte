@@ -1928,7 +1928,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         Editor::ShowTutorial,
         "tutorial",
         [],
-        "tutorial [reset|sessions]",
+        "tutorial [reset|sessions|next]",
         Optional(FreeText)
     ),
     editor_spec!(

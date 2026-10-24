@@ -566,7 +566,10 @@ its first row and scrolls like any read-only buffer.
 #### The tutorial
 
 `:tutorial` opens two ordinary panes: read-only instructions and disposable
-scratch text.
+scratch text. Complete each exercise by performing the described actions.
+The instructions announce success while the result stays visible. When ready,
+type `:tutorial next` and press Enter; unfinished exercises cannot be skipped.
+In Terminal Insert mode, press `Ctrl-\` before entering the command.
 
 - **First choice:** show Vim-like motion spellings, Helix-like ones, or both.
   This changes only the spellings in the tutorial, never Runyte's behavior or
@@ -583,6 +586,7 @@ scratch text.
 | Command | Effect |
 | --- | --- |
 | `:tutorial` | Resume the live lesson |
+| `:tutorial next` | Continue after completing the current exercise |
 | `:tutorial reset` | Start over |
 | `:tutorial sessions` | Open the persistent-session lesson directly |
 
@@ -5604,7 +5608,7 @@ The working directory starts where Runyte was launched.
 | `:theme [name]` | | Choose a theme in the settings menu, or switch straight to the named one |
 | `:help [topic]` | `?` | Open the general manual, optionally at a named section |
 | `:about` | | Show Runyte's logo, version, and getting-started guide |
-| `:tutorial [reset\|sessions]` | | Open or resume the tutorial; `reset` starts over and `sessions` opens its persistent-session lesson |
+| `:tutorial [reset\|sessions\|next]` | | Open or resume the tutorial; `reset` starts over, `sessions` opens its persistent-session lesson, and `next` continues a completed exercise |
 | `:grammar [runyte]` | | Report the active Runyte editing grammar |
 | `:notifications` | `not` | Open retained notification history |
 | `:service-health` | `health` | Inspect syntax, LSP, providers, and helper health |
