@@ -2354,9 +2354,11 @@ impl DocumentSyntax {
             // Tree-sitter includes matches whose nodes enclose this range, so
             // ancestor indentation survives without visiting unrelated bodies.
             // The range reaches back only to the row's last token, never to
-            // the start of an arbitrarily long row.
+            // the start of an arbitrarily long row. The token found can be an
+            // enclosing node when the row ends in whitespace the grammar
+            // skips, so it is held to the row as well.
             let scan = row_token.as_ref().map_or(byte_range.clone(), |token| {
-                token.start.min(newline_byte)..byte_range.end
+                token.start.max(row_start).min(newline_byte)..byte_range.end
             });
             let mut iter =
                 QueryMatchIter::<_, ()>::new(&self.syntax, rope_slice(text), loader, scan);
@@ -2419,8 +2421,11 @@ impl DocumentSyntax {
                     }
                 }
                 if let (Some(capture), Some(token)) = (opener, &row_token) {
+                    // Error recovery can insert a zero-width missing `:` or
+                    // bracket after the row's real last token; it was not
+                    // typed, so it opens nothing.
                     for node in captured_match.nodes_for_capture(capture) {
-                        ends_with_opener |= node.end_byte() == token.end;
+                        ends_with_opener |= node.end_byte() == token.end && !node.is_missing();
                     }
                 }
                 if let Some(capture) = tab {
@@ -4508,6 +4513,33 @@ mod tests {
                 compile_owned_query(definition, None, definition.folds, &["fold"])
                     .unwrap_or_else(|error| panic!("{} fold query: {error}", definition.name));
             }
+        }
+    }
+
+    #[test]
+    fn newline_indentation_ignores_missing_opener_captures() {
+        // Capture the enclosing case as well: tree-house omits matches
+        // consisting only of a zero-width MISSING token.
+        let registry = Registry::new_with_indentation_override(Some((
+            "go",
+            r#"(expression_case [":" (MISSING ":")] @indent.opener) @indent.always"#,
+        )));
+        let go = registry.language_for_name("go").unwrap();
+        for (source, opener) in [
+            (
+                "package p\nfunc f() {\n    switch x {\n    case 1\n        a()\n    }\n}\n",
+                false,
+            ),
+            (
+                "package p\nfunc f() {\n    switch x {\n    case 1\n        a():\n    }\n}\n",
+                true,
+            ),
+        ] {
+            let text = Text::from_str(source);
+            let syntax = DocumentSyntax::new(&text, go, &registry).unwrap();
+            let newline = source.find("a()").unwrap() + if opener { 4 } else { 3 };
+            let indent = syntax.newline_indent(&text, &registry, newline).unwrap();
+            assert_eq!(indent.ends_with_opener, opener, "{source:?}");
         }
     }
 

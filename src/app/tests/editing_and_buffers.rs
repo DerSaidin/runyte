@@ -3339,7 +3339,39 @@ fn syntax_newline_adds_a_level_exactly_below_rows_that_open_one() {
     // whose construct began on an earlier row, has no body yet, or does
     // not parse, which only the token ending the row identifies.
     let cases: &[(&str, &str, usize, bool)] = &[
+        ("p.go", "func f() {\n    a()\n}\n", 0, true),
+        ("p.go", "type S struct {\n    x int\n}\n", 0, true),
+        ("p.go", "type I interface {\n    F()\n}\n", 0, true),
+        ("p.go", "var x = S{\n    x: 1,\n}\n", 0, true),
+        (
+            "p.go",
+            "func f() {\n    select {\n    case <-c:\n        a()\n    }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.swift",
+            "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.swift",
+            "if a {\n    b()\n} else {\n    c()\n}\n",
+            2,
+            true,
+        ),
+        ("p.swift", "class C {\n    var x = 1\n}\n", 0, true),
+        ("p.swift", "let f = {\n    print(1)\n}\n", 0, true),
         ("p.py", "def g():\n    if x:\n    y = 1\n", 1, true),
+        ("p.py", "def f():\n    if x\n    y = 1\n", 1, false),
+        // Recovery inserts a MISSING colon after a(), not after case 1.
+        (
+            "p.go",
+            "package p\nfunc f() {\n    switch x {\n    case 1\n        a()\n    }\n}\n",
+            4,
+            false,
+        ),
         ("p.py", "def g():\n    for i in r:\n    y = 1\n", 1, true),
         (
             "p.py",
@@ -3434,7 +3466,7 @@ fn syntax_newline_adds_a_level_exactly_below_rows_that_open_one() {
             "p.go",
             "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
             1,
-            true,
+            false,
         ),
         (
             "p.go",
@@ -3652,7 +3684,15 @@ fn syntax_newline_adds_a_level_exactly_below_rows_that_open_one() {
         let before = indent(app.buffers[0].line_string(*row));
         app.edit_newline();
         let after = indent(app.buffers[0].line_string(row + 1));
-        if (after.len() > before.len()) != *expect {
+        let expected = if *expect {
+            format!(
+                "{before}{}",
+                if name.ends_with(".mk") { "\t" } else { "    " }
+            )
+        } else {
+            before.clone()
+        };
+        if after != expected {
             failures.push(format!(
                 "{name} row {row} {:?}: expected a level: {expect}, got {before:?} -> {after:?}",
                 original.lines().nth(*row).unwrap()

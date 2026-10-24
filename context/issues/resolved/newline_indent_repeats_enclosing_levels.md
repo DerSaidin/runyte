@@ -52,6 +52,12 @@ multi-line start tag of an HTML element with an end tag; and CMake's flat
 `else_command` and `elseif_command`. JavaScript also takes the TSX
 `jsx_element` capture, since its grammar parses JSX.
 
+Go and Swift brace openers name their parent nodes, excluding switch
+statements and Go select statements so their case labels stay at the
+statement's level. The opener scan is clamped to the current row start when
+the last token is an enclosing node. MISSING opener tokens inserted by parser
+error recovery are ignored: an untyped colon or bracket opens no level.
+
 YAML captured `block_mapping` and `block_sequence`, but a mapping begins at its
 first key, on a row that also holds content, so `a: 1` as a mapping's first row
 would still have indented. It now captures `(block_mapping_pair value:
@@ -86,6 +92,9 @@ in `tests/syntax.rs` asserts `opening_levels` beside `always_levels` through
 HTML, Markdown and PHP injections, and
 `every_canonical_plain_and_owned_capability_query_compiles` in
 `src/syntax/mod.rs` compiles every query with the new capture.
+`newline_indentation_ignores_missing_opener_captures` in that file captures
+a recovered Go colon alongside its enclosing case to verify the MISSING
+guard; tree-house omits matches containing only a zero-width token.
 
 Known limitation: a C-family `if`, `for` or `while` whose body is a single
 statement on the next row, with no braces, opens nothing, because the row ends
@@ -93,6 +102,8 @@ with `)` and an Allman-style brace on the next row would make a level there
 wrong. Make's `else` directive is likewise not captured. HTML void elements are
 matched by lowercase tag name only. Rows whose opener is none of the tokens
 above keep their indentation; they used to indent only because of the bug.
+HTML elements with implied end tags, such as `<li>a` and `<p>text`, still
+indent the next row; this behavior predates this branch.
 
 ## Report
 
