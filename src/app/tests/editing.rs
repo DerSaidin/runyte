@@ -2622,6 +2622,22 @@ fn an_append_session_left_without_escape_does_not_reach_a_later_insert() {
 
 #[test]
 fn a_caret_move_after_append_keeps_escape_where_the_caret_was_put() {
+    // Typing an existing auto-closer keeps the append record even though
+    // stepping over it leaves the buffer revision unchanged.
+    let mut config = Config::default();
+    config.editor.auto_close = true;
+    let mut app = App::new(config, None).unwrap();
+    seed(&mut app, "f x");
+    app.replace_active_selection(Selection::point(0));
+    press(&mut app, 'a');
+    press(&mut app, '(');
+    let revision = app.buffers[app.active().buffer].revision();
+    press(&mut app, ')');
+    assert_eq!(app.buffers[app.active().buffer].revision(), revision);
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "f() x");
+    assert_eq!(app.active().selection.primary().head, 2, "on `)`");
+
     // Left after `a` puts the caret on `b`; Escape leaves it there, as it
     // would after `i`, rather than stepping back again onto `a`.
     let mut app = App::new(Config::default(), None).unwrap();

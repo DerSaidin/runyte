@@ -1187,6 +1187,11 @@ impl App {
             self.active_mut()
                 .replace_selection(Selection::new(ranges, selection.primary_index()));
         }
+        if !has_changes {
+            // Stepping over a closer is typing that leaves the revision
+            // alone, so the append record would otherwise read it as a move.
+            self.record_append_insert_carets();
+        }
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {

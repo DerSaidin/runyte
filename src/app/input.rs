@@ -5769,20 +5769,27 @@ impl App {
     /// its buffer, so the carets that edit left behind are the ones Escape
     /// steps back from.
     pub(super) fn follow_append_insert(&mut self) {
-        let Some(append) = &self.append_insert else {
-            return;
-        };
-        let revision = self.buffers[append.buffer].revision();
-        if self.mode == Mode::Insert
-            && append.pane == self.active_pane
-            && append.buffer == self.active().buffer
-            && append.revision != revision
+        if let Some(append) = &self.append_insert
+            && append.revision != self.buffers[append.buffer].revision()
         {
-            let selection = self.active().selection.clone();
-            if let Some(append) = &mut self.append_insert {
-                append.revision = revision;
-                append.carets = selection;
-            }
+            self.record_append_insert_carets();
+        }
+    }
+
+    /// Records the current carets as the ones the append session's typing
+    /// left, while that session is still the active Insert session.
+    pub(super) fn record_append_insert_carets(&mut self) {
+        let pane = self.active_pane;
+        let buffer = self.active().buffer;
+        let carets = self.active().selection.clone();
+        let revision = self.buffers[buffer].revision();
+        if self.mode == Mode::Insert
+            && let Some(append) = &mut self.append_insert
+            && append.pane == pane
+            && append.buffer == buffer
+        {
+            append.revision = revision;
+            append.carets = carets;
         }
     }
 

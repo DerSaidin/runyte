@@ -38,7 +38,9 @@ selection no longer match, which also covers pointer input that changed the
 selection between actions and the workflows that assign `Mode::Normal` or
 `Mode::Insert` directly. After an action that changed the buffer's revision it
 records the selection the action left, so caret placement an edit makes after
-its transaction, such as inside an auto-closed pair, is included.
+its transaction, such as inside an auto-closed pair, is included. Typing an
+existing auto-closer also refreshes the recorded carets: stepping over it
+changes no text or revision, but is still part of the append typing.
 `enter_normal_mode` and every other Insert entry (`enter_insert(false)`,
 `open_line`, `InsertLineEnd`) clear it.
 
@@ -56,7 +58,8 @@ Tests are in `src/app/tests/editing.rs`:
 `a_caret_move_after_append_keeps_escape_where_the_caret_was_put`.
 
 Known limitation: Runyte leaves a caret where Helix keeps the appended range
-selected.
+selected. Edits applied outside an action, including headless
+`apply_transaction` and MCP/context edits, drop the record.
 
 ## Report
 
