@@ -944,7 +944,7 @@ fn selecting_motions_leave_other_modes_and_keys_as_they_were() {
     press(&mut select, 'v');
     press(&mut select, 'w');
     press(&mut select, 'w');
-    assert_eq!(selected(&select), (0, 8));
+    assert_eq!(selected(&select), (0, 7));
 
     // Motions that Helix does not make select still move a caret.
     let mut plain = selecting_app("one two");
@@ -960,6 +960,100 @@ fn selecting_motions_leave_other_modes_and_keys_as_they_were() {
     press(&mut paste, 'w');
     press(&mut paste, 'p');
     assert_eq!(text(&paste), "one one");
+}
+
+/// Select mode extends to where the selecting motion's head lands, so `v w`
+/// stops on the space before the next word, as Helix's does, rather than
+/// taking that word's first character.
+#[test]
+fn select_mode_word_motions_extend_to_the_selecting_head() {
+    for config in [Config::default(), caret_motions()] {
+        let extend = |source: &str, cursor: usize, keys: &str| {
+            let mut app = App::new(config.clone(), None).unwrap();
+            seed(&mut app, source);
+            app.active_mut().replace_selection(Selection::point(cursor));
+            for key in keys.chars() {
+                press(&mut app, key);
+            }
+            assert_eq!(app.mode, Mode::Select, "after {keys}");
+            selected(&app)
+        };
+        assert_eq!(extend("one two three", 0, "vw"), (0, 3));
+        assert_eq!(extend("one two three", 0, "vww"), (0, 7));
+        assert_eq!(extend("one two three", 0, "v2w"), (0, 7));
+        assert_eq!(extend("one-two three", 0, "vW"), (0, 7));
+        assert_eq!(extend("one-two three", 0, "vw"), (0, 2));
+        assert_eq!(extend("one two three", 0, "ve"), (0, 2));
+        assert_eq!(extend("one two three", 0, "vwb"), (0, 0));
+        // The last word extends to the document's final character.
+        assert_eq!(extend("one two three", 8, "vw"), (8, 12));
+        // From a row's last character the head crosses the break and takes
+        // the next row's word and the space after it, never resting on the
+        // terminator.
+        assert_eq!(extend("one\ntwo three", 2, "vw"), (2, 7));
+        // A backward selection keeps its anchor as `w` turns the head round.
+        assert_eq!(extend("one two three", 8, "vb"), (8, 4));
+        assert_eq!(extend("one two three", 8, "vbw"), (8, 7));
+    }
+
+    let mut app = selecting_app("one two three");
+    press(&mut app, 'v');
+    press(&mut app, 'w');
+    press(&mut app, 'y');
+    assert_eq!(app.read_selected_register().text, "one ");
+}
+
+/// A syntax expansion leaves a half-open range in Select mode; a word motion
+/// reads it as the inclusive range it draws, so the walk starts from the
+/// character under the caret and not the one after it.
+#[test]
+fn select_mode_word_motions_extend_a_half_open_syntax_selection() {
+    let root = crate::test_support::TestRuntimeRoot::new("select-word-half-open").unwrap();
+    let path = root.path().join("note.rs");
+    for (source, caret, expanded, key, operative, after_delete) in [
+        ("fn demo() {}\n", 3, (3, 7), 'w', (3, 10), "fn {}\n"),
+        ("fn demo() {}\n", 3, (3, 7), 'e', (3, 9), "fn  {}\n"),
+        ("fn demo() {}\n", 3, (3, 7), 'b', (3, 4), "fn emo() {}\n"),
+        // Walking from the character after `one` would start on the space
+        // and take `+ ` as well.
+        (
+            "fn f() { one + two }\n",
+            9,
+            (9, 12),
+            'w',
+            (9, 13),
+            "fn f() { + two }\n",
+        ),
+        (
+            "fn f() { one + two }\n",
+            9,
+            (9, 12),
+            'e',
+            (9, 14),
+            "fn f() {  two }\n",
+        ),
+    ] {
+        fs::write(&path, source).unwrap();
+        let mut app = App::new(Config::default(), Some(path.clone())).unwrap();
+        app.active_mut().replace_selection(Selection::point(caret));
+        app.expand_syntax_selection().unwrap();
+        assert_eq!(
+            app.active().selection_semantics(),
+            SelectionSemantics::HalfOpen
+        );
+        assert_eq!(app.operative_spans(), vec![expanded]);
+
+        press(&mut app, key);
+        assert_eq!(app.mode, Mode::Select, "after {key}");
+        assert_eq!(
+            app.active().selection_semantics(),
+            SelectionSemantics::Runyte,
+            "after {key}"
+        );
+        assert_eq!(app.operative_spans(), vec![operative], "{source:?} {key}");
+        press(&mut app, 'd');
+        assert_eq!(text(&app), after_delete, "{source:?} {key} d");
+    }
 }
 
 #[test]

@@ -809,7 +809,9 @@ text they cross, as in Helix:
 - Each press starts a fresh selection, which never contains a line break.
 - Anything that reads a selection reads this one: `p` replaces it, `s` and `/`
   search inside it, and `*` searches for it.
-- Other motions still move a caret, and Select mode still extends.
+- Other motions still move a caret, and Select mode still extends. Its word
+  motions extend to where these selections end, so `v w` takes `one ` from
+  `one two`, as in Helix, whether or not `editor.selecting_motions` is on.
 
 Set `editor.selecting_motions: false` to make these motions move a caret too.
 A word is then selected with `v` first: `v e d` deletes to the end of the word.
