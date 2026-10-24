@@ -912,9 +912,11 @@ travels with the working copy, not the commit.
 | Insert | `i`, `a`, `I`, `A`, `o`, `O`, `c` | Adds text at every caret |
 | Replace | `R` | Overwrites the character ahead of each caret |
 
-Escape returns to Normal mode. After `a`, `A`, `o`, or `O` the caret rests on
-the last character typed; after `i`, `I`, or `c` it rests on the character the
-text went in front of, as in Helix.
+Escape returns to Normal mode. After `a` the caret rests on the last character
+typed, and after `i`, `I`, or `c` on the character the text went in front of,
+as in Helix. After `A`, `o`, or `O` it rests on the last character typed, where
+Helix rests on the line terminator a Runyte caret never occupies. Moving the
+caret in Insert mode, by key or pointer, leaves it where it was put.
 
 **Replace mode details:**
 

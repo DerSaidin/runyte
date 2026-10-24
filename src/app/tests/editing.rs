@@ -2619,3 +2619,41 @@ fn an_append_session_left_without_escape_does_not_reach_a_later_insert() {
     assert_eq!(text(&app), "aXbcd\n");
     assert_eq!(app.active().selection.primary().head, 2, "still on `b`");
 }
+
+#[test]
+fn a_caret_move_after_append_keeps_escape_where_the_caret_was_put() {
+    // Left after `a` puts the caret on `b`; Escape leaves it there, as it
+    // would after `i`, rather than stepping back again onto `a`.
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    key(&mut app, KeyCode::Left, Modifiers::NONE);
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(app.active().selection.primary().head, 1, "on `b`");
+
+    // Typing after the move inserts in front of `b` and rests on it, as
+    // after `i`.
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    key(&mut app, KeyCode::Left, Modifiers::NONE);
+    press(&mut app, 'X');
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "aXbcd\n");
+    assert_eq!(app.active().selection.primary().head, 2, "on `b`");
+
+    // Edits keep the record current: typing, deleting, and typing again
+    // still rest on the last character typed.
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    type_keys(&mut app, "XY");
+    key(&mut app, KeyCode::Backspace, Modifiers::NONE);
+    press(&mut app, 'Z');
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "abXZcd\n");
+    assert_eq!(app.active().selection.primary().head, 3, "on `Z`");
+}

@@ -126,6 +126,19 @@ struct ReplaceStep {
     inverse: Transaction,
 }
 
+/// The Insert session `a` opened, with the carets as its last edit left them.
+///
+/// Escape steps back onto the last appended character only while the carets
+/// are still exactly there: a motion, a click, or a pane switch in Insert mode
+/// ends the record, so the caret then stays where it was put, as after `i`.
+#[derive(Clone, Debug)]
+struct AppendInsert {
+    pane: usize,
+    buffer: usize,
+    revision: u64,
+    carets: Selection,
+}
+
 #[derive(Clone, Debug)]
 struct ReplaceSession {
     buffer: usize,
@@ -2919,10 +2932,10 @@ pub struct App {
     pub mode: Mode,
     /// The reversible overwrite trail owned by a live Replace-mode edit.
     replace_session: Option<ReplaceSession>,
-    /// The buffer whose live Insert session `a` opened. Escape then steps
-    /// each caret back onto the last inserted character, as Helix does,
-    /// instead of leaving it on the character after the insertion.
-    append_insert: Option<usize>,
+    /// The live Insert session `a` opened. Escape then steps each caret back
+    /// onto the last inserted character, as Helix does, instead of leaving it
+    /// on the character after the insertion.
+    append_insert: Option<AppendInsert>,
     /// A freshly converted empty Markdown item can lose its alignment in one
     /// further Backspace, including when no earlier sibling identifies it.
     list_alignments: Vec<editing::ListAlignment>,
