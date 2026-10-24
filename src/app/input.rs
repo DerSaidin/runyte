@@ -4650,6 +4650,7 @@ impl App {
                     Range::point(buffer.line_to_offset(row) + buffer.line_len(row))
                 });
                 self.active_mut().replace_selection(selection);
+                self.append_insert = None;
                 self.mode = Mode::Insert;
             }
             Command::OpenLineBelow => self.open_line(false),
@@ -5662,6 +5663,7 @@ impl App {
         if matches!(mode, Mode::Insert | Mode::Replace) {
             let buffer = &self.buffers[buffer_id];
             let vim = self.grammar.kind() == crate::command::GrammarKind::Vim;
+            let append = mode == Mode::Insert && self.append_insert == Some(buffer_id);
             selection.transform(|range| {
                 let mut head = range.head;
                 if vim {
@@ -5669,6 +5671,13 @@ impl App {
                     let start = buffer.line_to_offset(row);
                     if head > start {
                         head -= 1;
+                    }
+                } else if append {
+                    // The caret never steps back across the row start, so an
+                    // append that ended on a fresh line stays on that line.
+                    let row = buffer.offset_to_row(head);
+                    if head > buffer.line_to_offset(row) {
+                        head = buffer.previous_grapheme(head);
                     }
                 }
                 Range::point(buffer.clamp_offset(head, false))
@@ -5699,6 +5708,7 @@ impl App {
         );
         self.active_mut().replace_selection(selection);
         self.replace_session = None;
+        self.append_insert = None;
         self.mode = Mode::Normal;
         match self.grammar.kind() {
             crate::command::GrammarKind::Runyte => self
@@ -5726,6 +5736,7 @@ impl App {
         });
         self.active_mut().replace_selection(selection);
         self.buffers[buffer_id].begin_undo_group();
+        self.append_insert = after.then_some(buffer_id);
         self.mode = Mode::Insert;
     }
 

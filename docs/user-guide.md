@@ -912,6 +912,10 @@ travels with the working copy, not the commit.
 | Insert | `i`, `a`, `I`, `A`, `o`, `O`, `c` | Adds text at every caret |
 | Replace | `R` | Overwrites the character ahead of each caret |
 
+Escape returns to Normal mode. After `a`, `A`, `o`, or `O` the caret rests on
+the last character typed; after `i`, `I`, or `c` it rests on the character the
+text went in front of, as in Helix.
+
 **Replace mode details:**
 
 - Entering collapses every selection to its active head.

@@ -1905,6 +1905,7 @@ impl App {
         }
         let selection = Selection::new(heads.into_iter().map(Range::point).collect(), 0);
         self.active_mut().replace_selection(selection);
+        self.append_insert = None;
         self.mode = Mode::Insert;
     }
 

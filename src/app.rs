@@ -2919,6 +2919,10 @@ pub struct App {
     pub mode: Mode,
     /// The reversible overwrite trail owned by a live Replace-mode edit.
     replace_session: Option<ReplaceSession>,
+    /// The buffer whose live Insert session `a` opened. Escape then steps
+    /// each caret back onto the last inserted character, as Helix does,
+    /// instead of leaving it on the character after the insertion.
+    append_insert: Option<usize>,
     /// A freshly converted empty Markdown item can lose its alignment in one
     /// further Backspace, including when no earlier sibling identifies it.
     list_alignments: Vec<editing::ListAlignment>,
@@ -3672,6 +3676,7 @@ impl App {
             maximized: None,
             mode: initial_mode,
             replace_session: None,
+            append_insert: None,
             list_alignments: Vec::new(),
             command: String::new(),
             command_cursor: 0,

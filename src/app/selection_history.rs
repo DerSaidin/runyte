@@ -108,6 +108,11 @@ impl App {
     pub(super) fn with_selection_action<T>(&mut self, action: impl FnOnce(&mut Self) -> T) -> T {
         let outer = self.selection_action_depth == 0;
         if outer {
+            // Paths that leave Insert mode without Escape cannot carry an
+            // append session into a later Insert session they did not open.
+            if self.mode != Mode::Insert {
+                self.append_insert = None;
+            }
             self.finish_selection_drag();
             // Do not clone an oversized selection, or retain a history with
             // an unrecordable gap. Terminal visits leave buffer history alone.
