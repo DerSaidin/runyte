@@ -207,7 +207,8 @@ use crate::workspace::{
 // Version 77 adds generation-checked dismissal of those captures.
 // Version 78 adds a correlated post-input snapshot for bundled window routing.
 // Version 79 carries the live document-preview theme colour setting.
-pub const VERSION: u32 = 79;
+// Version 80 carries pane-drop previews and explicit pointer-capture cancellation.
+pub const VERSION: u32 = 80;
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PATHS: usize = 32;
 pub const MAX_PATH_BYTES: usize = 32 * 1024;
@@ -583,6 +584,8 @@ pub enum ClientRequest {
         frame: FrameId,
         repetitions: u16,
     },
+    /// Cancels a captured pointer gesture after frontend focus or capture loss.
+    CancelPointer,
     Resize {
         geometry: FrameGeometry,
     },
@@ -1564,7 +1567,7 @@ mod tests {
 
     #[test]
     fn protocol_version_and_request_bounds_are_explicit() {
-        assert_eq!(VERSION, 79);
+        assert_eq!(VERSION, 80);
         let oversized_command = ClientRequest::Invoke {
             command: CommandRequest {
                 name: "open".to_owned(),

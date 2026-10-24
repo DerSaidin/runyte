@@ -185,3 +185,101 @@ fn acknowledged_input_waits_for_preview_preparation_without_losing_its_barrier()
         })
     ));
 }
+
+#[test]
+fn alt_pane_gesture_bypasses_native_media_until_release() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut queue: Queue = Queue::default();
+    let mouse = |kind, modifiers, attachment| {
+        let mut input = key('x', attachment);
+        input.event = Event::Mouse(MouseEvent {
+            kind,
+            column: 5,
+            row: 5,
+            modifiers,
+        });
+        input
+    };
+    assert!(queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        KeyModifiers::ALT,
+        1
+    )));
+    assert!(queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        KeyModifiers::NONE,
+        1
+    )));
+    let mut escape = key('x', 1);
+    escape.event = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(queue.editor_pane_gesture(&escape));
+    assert!(queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        KeyModifiers::NONE,
+        1
+    )));
+    assert!(!queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        KeyModifiers::NONE,
+        1
+    )));
+    assert!(queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        KeyModifiers::ALT,
+        1
+    )));
+    assert!(!queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        KeyModifiers::ALT,
+        2
+    )));
+    assert!(queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        KeyModifiers::ALT,
+        2
+    )));
+    queue.clear();
+    assert!(!queue.editor_pane_gesture(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        KeyModifiers::NONE,
+        2
+    )));
+}
+
+#[test]
+fn lost_pane_button_cancels_without_synthesizing_a_drop() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut queue: Queue = Queue::default();
+    let mut input = key('x', 1);
+    input.event = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::ALT,
+    });
+    assert!(queue.editor_pane_gesture(&input));
+    input.event = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 8,
+        row: 8,
+        modifiers: KeyModifiers::NONE,
+    });
+    queue.cancel_lost_pane_button(&mut input, true);
+    assert!(matches!(input.event, Event::Mouse(_)));
+    queue.cancel_lost_pane_button(&mut input, false);
+    assert!(matches!(input.event, Event::FocusLost));
+    assert!(queue.pane_gesture.is_none());
+    assert!(!queue.editor_pane_gesture(&key('x', 1)));
+}
+
+#[test]
+fn focus_loss_clears_native_pane_capture() {
+    let mut queue: Queue = Queue {
+        pane_gesture: Some(1),
+        ..Queue::default()
+    };
+    let mut input = key('x', 1);
+    input.event = Event::FocusLost;
+    assert!(!queue.editor_pane_gesture(&input));
+    assert!(queue.pane_gesture.is_none());
+}

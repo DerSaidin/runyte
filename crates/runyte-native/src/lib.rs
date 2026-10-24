@@ -855,6 +855,12 @@ impl NativeView {
     ) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window);
+        cx.observe_window_activation(window, |view, window, cx| {
+            if !window.is_window_active() {
+                view.queue_input(Event::FocusLost, input_routing::Action::Direct, cx);
+            }
+        })
+        .detach();
         let frame = bridge.frame.lock().unwrap().take().map(std::rc::Rc::new);
         let (width, height) = *bridge.dimensions.lock().unwrap();
         bridge.send(Event::Resize(width, height));

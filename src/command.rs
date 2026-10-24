@@ -908,6 +908,22 @@ editor_commands! {
     FocusWindowRight => ("focus-window-right", "Focus the pane to the right"),
     NextWindow => ("next-window", "Focus the next pane"),
     SwapWindow => ("swap-window", "Swap this pane's content with the previously focused pane"),
+    MoveWindowLeft => (
+        "move-window-left",
+        "Move pane to the left edge, full height"
+    ),
+    MoveWindowDown => (
+        "move-window-down",
+        "Move pane to the bottom edge, full width"
+    ),
+    MoveWindowUp => (
+        "move-window-up",
+        "Move pane to the top edge, full width"
+    ),
+    MoveWindowRight => (
+        "move-window-right",
+        "Move pane to the right edge, full height"
+    ),
     CloseWindow => ("close-window", "Close the active pane"),
     OnlyWindow => ("only-window", "Close every pane except the active pane"),
     EqualizeWindows => (
@@ -1421,6 +1437,10 @@ impl EditorCommand {
             | Self::FocusWindowRight
             | Self::NextWindow
             | Self::SwapWindow
+            | Self::MoveWindowLeft
+            | Self::MoveWindowDown
+            | Self::MoveWindowUp
+            | Self::MoveWindowRight
             | Self::CloseWindow
             | Self::OnlyWindow
             | Self::EqualizeWindows => CommandCategory::Window,

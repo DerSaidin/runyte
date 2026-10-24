@@ -825,6 +825,7 @@ impl Clients {
                 | ClientRequest::MediaPages { .. }
                 | ClientRequest::FrameDrawn { .. }
                 | ClientRequest::Pointer { .. }
+                | ClientRequest::CancelPointer
                 | ClientRequest::Invoke { .. }
                 | ClientRequest::Notify { .. }
                 | ClientRequest::InputBarrier { .. }
@@ -890,6 +891,10 @@ impl Clients {
                     ) => {}
                     Err(error) => host.report_host_error(error.to_string()),
                 }
+                false
+            }
+            ClientRequest::CancelPointer if interactive => {
+                self.publish_requested |= host.cancel_pointer_drag();
                 false
             }
             ClientRequest::Resize { geometry } if interactive => {

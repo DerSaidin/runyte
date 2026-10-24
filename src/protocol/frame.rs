@@ -206,6 +206,7 @@ impl EditorDamageFrame {
             || base.editor.preview_theme_colors != next.editor.preview_theme_colors
             || base.editor.mode != next.editor.mode
             || base.editor.session_strip != next.editor.session_strip
+            || base.editor.pane_drop != next.editor.pane_drop
             || base.editor.directory_tree != next.editor.directory_tree
             || base.editor.panes.len() != next.editor.panes.len()
         {
@@ -354,6 +355,7 @@ impl TerminalDamageFrame {
             || base.editor.preview_theme_colors != next.editor.preview_theme_colors
             || base.editor.mode != next.editor.mode
             || base.editor.session_strip != next.editor.session_strip
+            || base.editor.pane_drop != next.editor.pane_drop
             || base.editor.directory_tree != next.editor.directory_tree
             || base.editor.panes.len() != next.editor.panes.len()
         {
@@ -575,6 +577,7 @@ pub struct EditorSnapshot {
     pub mode: Mode,
     pub directory_tree: Option<DirectoryTreeSnapshot>,
     pub panes: Vec<PaneSnapshot>,
+    pub pane_drop: Option<Rect>,
     pub status: StatusSnapshot,
     pub session_strip: Option<SessionStripSnapshot>,
 }
@@ -589,6 +592,7 @@ impl From<core::EditorSnapshot> for EditorSnapshot {
             mode: value.mode.into(),
             directory_tree: value.directory_tree.map(Into::into),
             panes: value.panes.into_iter().map(Into::into).collect(),
+            pane_drop: value.pane_drop.map(Into::into),
             status: value.status.into(),
             session_strip: value.session_strip.map(Into::into),
         }
@@ -610,6 +614,7 @@ impl TryFrom<EditorSnapshot> for core::EditorSnapshot {
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            pane_drop: value.pane_drop.map(Into::into),
             status: value.status.into(),
             session_strip: value.session_strip.map(TryInto::try_into).transpose()?,
         })
@@ -1004,6 +1009,7 @@ mod tests {
             editor: EditorSnapshot {
                 directory_tree: None,
                 session_strip: None,
+                pane_drop: None,
                 geometry: FrameGeometry::default(),
                 theme: theme.into(),
                 terminal_theme_colors: true,
@@ -1227,6 +1233,24 @@ mod tests {
         let wire = serde_json::to_vec(&next).unwrap();
         let decoded: HostFrame = serde_json::from_slice(&wire).unwrap();
         assert_eq!(decoded.editor.session_strip, next.editor.session_strip);
+    }
+
+    #[test]
+    fn a_moved_pane_drop_preview_requires_a_full_frame() {
+        let base = terminal_frame(1, 1, 'x');
+        let mut next = base.clone();
+        next.id = FrameId::from_raw(2);
+        next.editor.pane_drop = Some(Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        assert!(TerminalDamageFrame::between(&base, &next).is_none());
+        assert!(EditorDamageFrame::between(&base, &next).is_none());
+        let wire = serde_json::to_vec(&next).unwrap();
+        let decoded: HostFrame = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded.editor.pane_drop, next.editor.pane_drop);
     }
 
     #[test]

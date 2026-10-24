@@ -74,7 +74,7 @@ use crate::{
     jumplist::{Jump, JumpList, SelectionSemantics},
     keymap::{BindingScope, BindingTarget, ContextAction, KeySequence, Keymap, keymap_for},
     launch::{LaunchPosition, LaunchTarget},
-    layout::{Axis, Layout, Rect},
+    layout::{Axis, Edge, Layout, Rect},
     lsp::{
         ActionEntry, Capabilities, ChangeSync, Completion, DiagnosticStore, DocumentEdit,
         DocumentSync, Encoding, LspCommand, LspEvent, LspHandle, LspRange, RequestKind, Response,
@@ -278,6 +278,7 @@ mod lsp_trust_workflows;
 mod mouse_autoscroll;
 mod movement;
 mod navigation_workflows;
+mod pane_drag;
 use navigation_workflows::DestinationScope;
 mod diff_work;
 mod editor_mode;
@@ -1861,6 +1862,11 @@ enum PointerDrag {
         last_column: u16,
         last_row: u16,
     },
+    /// An Alt-drag carrying `pane` to wherever it is released.
+    MovePane {
+        pane: usize,
+        drop: Option<pane_drag::PaneDrop>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -3278,6 +3284,8 @@ pub struct App {
     indentation_prompt_hint: Option<String>,
     settings_origin_buffer: Option<usize>,
     pointer_drag: Option<PointerDrag>,
+    /// A consumed Alt-left press owns its trailing reports even after cancellation.
+    pane_pointer_owned: bool,
     /// The release and drags of a link click remain editor-owned even when
     /// navigation opens a popup or changes the pane underneath the pointer.
     pointer_link_pressed: bool,
@@ -3863,6 +3871,7 @@ impl App {
             indentation_prompt_hint: None,
             settings_origin_buffer: None,
             pointer_drag: None,
+            pane_pointer_owned: false,
             pointer_link_pressed: false,
             pointer_autoscroll: None,
             lsp_actions: Vec::new(),

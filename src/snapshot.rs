@@ -173,6 +173,9 @@ pub struct EditorSnapshot {
     pub mode: Mode,
     pub directory_tree: Option<DirectoryTreeSnapshot>,
     pub panes: Vec<PaneSnapshot>,
+    /// The area a pane being Alt-dragged would occupy if it were released
+    /// now, outlined over the panes it would displace.
+    pub pane_drop: Option<Rect>,
     pub status: StatusSnapshot,
     pub session_strip: Option<SessionStripSnapshot>,
 }
@@ -964,6 +967,7 @@ impl App {
             preview_theme_colors: self.config.editor.preview_theme_colors,
             mode: self.mode,
             panes,
+            pane_drop: self.pane_drop_preview(prepared),
             status: StatusSnapshot {
                 mode: self.mode,
                 workspace_number: self.workspace_number,
