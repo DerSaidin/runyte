@@ -622,6 +622,13 @@ impl App {
 
     /// Runs a word motion, selecting the word it crosses when
     /// `editor.selecting_motions` is on.
+    ///
+    /// Select mode extends to where that selection's head lands rather than
+    /// to the offset a caret would move to, whatever the setting, as Helix's
+    /// extending word motions do. A caret's `w` stops on the next word's first
+    /// character, and an inclusive range extended there would take it too.
+    /// The walk reads inclusive ranges, so a half-open one, such as a syntax
+    /// expansion leaves, is converted first and the result is inclusive.
     pub(super) fn word_motion(&mut self, motion: Motion) {
         let (target, long) = match motion {
             Motion::WordForward => (WordTarget::NextStart, false),
@@ -632,18 +639,30 @@ impl App {
             Motion::LongWordBack => (WordTarget::PreviousStart, true),
             _ => unreachable!("only word motions select words"),
         };
-        if !self.selecting_motions_apply() {
+        let extend = self.mode == Mode::Select && self.active_terminal().is_none();
+        if !extend && !self.selecting_motions_apply() {
             self.motion(motion);
             return;
         }
+        let mut selection = self.active().selection.clone();
+        if extend && self.active().selection_semantics() != SelectionSemantics::Runyte {
+            selection = self.vim_half_open_to_inclusive(selection);
+        }
         let buffer = self.active_buffer();
-        let selection = self
-            .active()
-            .selection
-            .transform(|range| select_word_motion(buffer, range, target, long));
+        let selection = selection.transform(|range| {
+            let crossed = select_word_motion(buffer, range, target, long);
+            if extend {
+                range.extend_to(crossed.head)
+            } else {
+                crossed
+            }
+        });
         let pane = self.active_mut();
         pane.preserve_scroll = false;
         pane.replace_selection(selection);
+        if extend {
+            pane.mark_selection_semantics(SelectionSemantics::Runyte);
+        }
         self.reveal_active_selection_from_folds();
     }
 
