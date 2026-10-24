@@ -462,7 +462,9 @@ impl TerminationSignals {
         let (reader, writer) = std::os::unix::net::UnixStream::pair()?;
         reader.set_nonblocking(true)?;
         writer.set_nonblocking(true)?;
-        let reader = tokio::io::unix::AsyncFd::new(reader)?;
+        // SAFETY: AsyncFd owns the stream until deregistration; its descriptor
+        // is never closed or replaced through a raw handle.
+        let reader = unsafe { tokio::io::unix::AsyncFd::register(reader) }?;
         install_termination_handlers()?;
         TERMINATION_WRITE_FD.store(writer.as_raw_fd(), std::sync::atomic::Ordering::Release);
         Ok(Self { reader, writer })
@@ -956,13 +958,24 @@ impl HostSupervisor {
     fn new(kind: HostSupervisorKind, pid: libc::pid_t) -> Result<Self> {
         #[cfg(target_os = "linux")]
         let pidfd = open_pidfd(pid)?
-            .map(tokio::io::unix::AsyncFd::new)
+            .map(|pidfd| {
+                // SAFETY: the owned pidfd stays open and unchanged until
+                // AsyncFd deregisters it and drops its OwnedFd.
+                unsafe { tokio::io::unix::AsyncFd::register(pidfd) }
+            })
             .transpose()
             .context("cannot register host supervisor process descriptor")?;
         #[cfg(target_os = "macos")]
         let process_queue = open_process_queue(pid)?
             .map(|queue| {
-                tokio::io::unix::AsyncFd::with_interest(queue, tokio::io::Interest::READABLE)
+                // SAFETY: AsyncFd owns the queue descriptor; event polling
+                // never closes or replaces it before deregistration.
+                unsafe {
+                    tokio::io::unix::AsyncFd::register_with_interest(
+                        queue,
+                        tokio::io::Interest::READABLE,
+                    )
+                }
             })
             .transpose()
             .context("cannot register host supervisor process queue")?;
