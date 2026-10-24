@@ -917,6 +917,12 @@ travels with the working copy, not the commit.
 | Insert | `i`, `a`, `I`, `A`, `o`, `O`, `c` | Adds text at every caret |
 | Replace | `R` | Overwrites the character ahead of each caret |
 
+Escape returns to Normal mode. After `a` the caret rests on the last character
+typed, and after `i`, `I`, or `c` on the character the text went in front of,
+as in Helix. After `A`, `o`, or `O` it rests on the last character typed, where
+Helix rests on the line terminator a Runyte caret never occupies. Moving the
+caret in Insert mode, by key or pointer, leaves it where it was put.
+
 **Replace mode details:**
 
 - Entering collapses every selection to its active head.
@@ -1023,7 +1029,7 @@ mouse positioning and language-server formatting options. See
 | Key | Keeps | Adds |
 | --- | --- | --- |
 | `o` / `O` (Normal) | The row's exact leading spaces and tabs | Nothing: no list marker, no syntax level |
-| Enter (Insert) | The row's exact leading spaces and tabs | At most one level in `editor.indent` style when the syntax indentation query asks for it; a grammar that requires a tab still gets a tab |
+| Enter (Insert) | The row's exact leading spaces and tabs | At most one level in `editor.indent` style when the row opens a block the syntax indentation query recognizes: it ends with an opening bracket in a brace language, a Python header or YAML key ends with `:`, or a `case` label, an element's start tag, or a construct such as `else:` begins on it. An ordinary row inside a block adds nothing. A grammar that requires a tab still gets a tab |
 
 `o` and `O` place the caret after the indentation, and work the same with
 smart newline off.

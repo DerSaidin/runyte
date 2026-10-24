@@ -1208,6 +1208,11 @@ impl App {
             self.active_mut()
                 .replace_selection(Selection::new(ranges, selection.primary_index()));
         }
+        if !has_changes {
+            // Stepping over a closer is typing that leaves the revision
+            // alone, so the append record would otherwise read it as a move.
+            self.record_append_insert_carets();
+        }
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {
@@ -1503,10 +1508,12 @@ impl App {
                                 .newline_indent(buffer.text(), &self.registry, newline_offset)
                                 .ok()
                         })
+                        // `prefix` already carries every enclosing level, so
+                        // only a container opening on this row adds one.
                         .map_or("", |indent| {
-                            if indent.tab_levels > 0 {
+                            if indent.opening_tab_levels > 0 {
                                 "\t"
-                            } else if indent.begin_levels + indent.always_levels > 0 {
+                            } else if indent.opening_levels > 0 || indent.ends_with_opener {
                                 unit.as_str()
                             } else {
                                 ""
@@ -1924,6 +1931,7 @@ impl App {
         }
         let selection = Selection::new(heads.into_iter().map(Range::point).collect(), 0);
         self.active_mut().replace_selection(selection);
+        self.append_insert = None;
         self.mode = Mode::Insert;
     }
 

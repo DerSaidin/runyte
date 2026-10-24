@@ -2600,3 +2600,170 @@ fn extend_line_counts_first_snap_on_empty_and_single_character_rows() {
         assert_eq!(selected_rows(&app), (1, 2));
     }
 }
+
+/// Enters Insert mode with `entry` on `b` in `  abcd`, types `typed`, and
+/// leaves with Escape, returning the text and the character under the caret.
+fn escape_after(entry: &str, typed: &str) -> (String, Option<char>) {
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "  abcd\n");
+    app.replace_active_selection(Selection::point(3));
+    type_keys(&mut app, entry);
+    if !typed.is_empty() {
+        app.handle_input(InputEvent::Text(typed.to_owned()))
+            .unwrap();
+    }
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(app.mode, Mode::Normal);
+    let head = app.active().selection.primary().head;
+    let text = text(&app);
+    let under = text.chars().nth(head);
+    (text, under)
+}
+
+#[test]
+fn escape_after_append_rests_on_the_last_inserted_character_like_helix() {
+    // `i` leaves the caret on the character the text went in front of, as
+    // Helix does; every append form rests on the last inserted character,
+    // in mid-line as at the line end.
+    for (entry, text, under) in [
+        ("i", "  aXYbcd\n", 'b'),
+        ("I", "XY  abcd\n", ' '),
+        ("c", "  aXYcd\n", 'c'),
+        ("a", "  abXYcd\n", 'Y'),
+        ("A", "  abcdXY\n", 'Y'),
+        ("o", "  abcd\n  XY\n", 'Y'),
+        ("O", "  XY\n  abcd\n", 'Y'),
+    ] {
+        assert_eq!(
+            escape_after(entry, "XY"),
+            (text.to_owned(), Some(under)),
+            "{entry}"
+        );
+    }
+}
+
+#[test]
+fn escape_straight_after_append_returns_to_the_original_character() {
+    assert_eq!(escape_after("a", ""), ("  abcd\n".to_owned(), Some('b')));
+    assert_eq!(escape_after("i", ""), ("  abcd\n".to_owned(), Some('b')));
+}
+
+#[test]
+fn escape_after_append_steps_back_over_a_whole_grapheme_and_not_across_rows() {
+    let flag = "\u{1F1F5}\u{1F1F1}";
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "ab\n");
+    app.replace_active_selection(Selection::point(0));
+    press(&mut app, 'a');
+    app.handle_input(InputEvent::Text(flag.to_owned())).unwrap();
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), format!("a{flag}b\n"));
+    assert_eq!(
+        app.active().selection.primary().head,
+        1,
+        "on the flag's start"
+    );
+
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "ab\n");
+    app.replace_active_selection(Selection::point(0));
+    press(&mut app, 'a');
+    key(&mut app, KeyCode::Enter, Modifiers::NONE);
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "a\nb\n");
+    assert_eq!(
+        app.active().selection.primary().head,
+        2,
+        "an append ending at a row start stays on that row"
+    );
+}
+
+#[test]
+fn escape_after_append_steps_back_at_every_caret() {
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "ab\ncd\n");
+    app.replace_active_selection(Selection::new(vec![Range::point(0), Range::point(3)], 0));
+    press(&mut app, 'a');
+    press(&mut app, 'X');
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "aXb\ncXd\n");
+    let heads: Vec<_> = app
+        .active()
+        .selection
+        .ranges()
+        .iter()
+        .map(|range| range.head)
+        .collect();
+    assert_eq!(heads, vec![1, 5]);
+}
+
+#[test]
+fn an_append_session_left_without_escape_does_not_reach_a_later_insert() {
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    // Some workflows leave Insert mode by assigning the mode directly, and
+    // others enter it the same way. Neither path is Escape or `a`.
+    app.mode = Mode::Normal;
+    press(&mut app, 'h');
+    app.mode = Mode::Insert;
+    press(&mut app, 'X');
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "aXbcd\n");
+    assert_eq!(app.active().selection.primary().head, 2, "still on `b`");
+}
+
+#[test]
+fn a_caret_move_after_append_keeps_escape_where_the_caret_was_put() {
+    // Typing an existing auto-closer keeps the append record even though
+    // stepping over it leaves the buffer revision unchanged.
+    let mut config = Config::default();
+    config.editor.auto_close = true;
+    let mut app = App::new(config, None).unwrap();
+    seed(&mut app, "f x");
+    app.replace_active_selection(Selection::point(0));
+    press(&mut app, 'a');
+    press(&mut app, '(');
+    let revision = app.buffers[app.active().buffer].revision();
+    press(&mut app, ')');
+    assert_eq!(app.buffers[app.active().buffer].revision(), revision);
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "f() x");
+    assert_eq!(app.active().selection.primary().head, 2, "on `)`");
+
+    // Left after `a` puts the caret on `b`; Escape leaves it there, as it
+    // would after `i`, rather than stepping back again onto `a`.
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    key(&mut app, KeyCode::Left, Modifiers::NONE);
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(app.active().selection.primary().head, 1, "on `b`");
+
+    // Typing after the move inserts in front of `b` and rests on it, as
+    // after `i`.
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    key(&mut app, KeyCode::Left, Modifiers::NONE);
+    press(&mut app, 'X');
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "aXbcd\n");
+    assert_eq!(app.active().selection.primary().head, 2, "on `b`");
+
+    // Edits keep the record current: typing, deleting, and typing again
+    // still rest on the last character typed.
+    let mut app = App::new(Config::default(), None).unwrap();
+    seed(&mut app, "abcd\n");
+    app.replace_active_selection(Selection::point(1));
+    press(&mut app, 'a');
+    type_keys(&mut app, "XY");
+    key(&mut app, KeyCode::Backspace, Modifiers::NONE);
+    press(&mut app, 'Z');
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert_eq!(text(&app), "abXZcd\n");
+    assert_eq!(app.active().selection.primary().head, 3, "on `Z`");
+}

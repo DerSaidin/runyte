@@ -4665,6 +4665,7 @@ impl App {
                     Range::point(buffer.line_to_offset(row) + buffer.line_len(row))
                 });
                 self.active_mut().replace_selection(selection);
+                self.append_insert = None;
                 self.mode = Mode::Insert;
             }
             Command::OpenLineBelow => self.open_line(false),
@@ -5677,6 +5678,11 @@ impl App {
         if matches!(mode, Mode::Insert | Mode::Replace) {
             let buffer = &self.buffers[buffer_id];
             let vim = self.grammar.kind() == crate::command::GrammarKind::Vim;
+            let append = mode == Mode::Insert
+                && self
+                    .append_insert
+                    .as_ref()
+                    .is_some_and(|append| append.buffer == buffer_id);
             selection.transform(|range| {
                 let mut head = range.head;
                 if vim {
@@ -5684,6 +5690,13 @@ impl App {
                     let start = buffer.line_to_offset(row);
                     if head > start {
                         head -= 1;
+                    }
+                } else if append {
+                    // The caret never steps back across the row start, so an
+                    // append that ended on a fresh line stays on that line.
+                    let row = buffer.offset_to_row(head);
+                    if head > buffer.line_to_offset(row) {
+                        head = buffer.previous_grapheme(head);
                     }
                 }
                 Range::point(buffer.clamp_offset(head, false))
@@ -5714,6 +5727,7 @@ impl App {
         );
         self.active_mut().replace_selection(selection);
         self.replace_session = None;
+        self.append_insert = None;
         self.mode = Mode::Normal;
         match self.grammar.kind() {
             crate::command::GrammarKind::Runyte => self
@@ -5741,7 +5755,57 @@ impl App {
         });
         self.active_mut().replace_selection(selection);
         self.buffers[buffer_id].begin_undo_group();
+        self.append_insert = after.then(|| super::AppendInsert {
+            pane: self.active_pane,
+            buffer: buffer_id,
+            revision: self.buffers[buffer_id].revision(),
+            carets: self.active().selection.clone(),
+        });
         self.mode = Mode::Insert;
+    }
+
+    /// Ends the append record when anything but its own edits moved the
+    /// carets since it was last brought up to date, or Insert mode was left
+    /// without Escape. Runs before every outer action.
+    pub(super) fn check_append_insert(&mut self) {
+        let Some(append) = &self.append_insert else {
+            return;
+        };
+        if self.mode != Mode::Insert
+            || append.pane != self.active_pane
+            || append.buffer != self.active().buffer
+            || append.carets != self.active().selection
+        {
+            self.append_insert = None;
+        }
+    }
+
+    /// Brings the append record up to date after an outer action that edited
+    /// its buffer, so the carets that edit left behind are the ones Escape
+    /// steps back from.
+    pub(super) fn follow_append_insert(&mut self) {
+        if let Some(append) = &self.append_insert
+            && append.revision != self.buffers[append.buffer].revision()
+        {
+            self.record_append_insert_carets();
+        }
+    }
+
+    /// Records the current carets as the ones the append session's typing
+    /// left, while that session is still the active Insert session.
+    pub(super) fn record_append_insert_carets(&mut self) {
+        let pane = self.active_pane;
+        let buffer = self.active().buffer;
+        let carets = self.active().selection.clone();
+        let revision = self.buffers[buffer].revision();
+        if self.mode == Mode::Insert
+            && let Some(append) = &mut self.append_insert
+            && append.pane == pane
+            && append.buffer == buffer
+        {
+            append.revision = revision;
+            append.carets = carets;
+        }
     }
 
     /// Executes one validated semantic invocation. Key bindings, the command

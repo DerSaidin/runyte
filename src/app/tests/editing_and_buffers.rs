@@ -2869,6 +2869,106 @@ fn smart_newline_preserves_crlf_and_uses_its_syntax_indent() {
 }
 
 #[test]
+fn syntax_newline_inside_a_block_keeps_the_rows_own_indentation() {
+    // Enter on an ordinary row adds nothing: the row's leading whitespace
+    // already carries every enclosing level. Counting the enclosing block
+    // again stepped one level deeper on every press.
+    for (name, original, row) in [
+        ("inside-block.yaml", "root:\n  a: 1\n  b: 2\n", 1),
+        ("inside-block.yaml", "a: 1\nb: 2\n", 0),
+        (
+            "inside-block.jsonc",
+            "{\n  // note\n  \"a\": 1,\n  \"b\": 2\n}\n",
+            2,
+        ),
+        (
+            "inside-block.rs",
+            "fn f() {\n    let a = 1;\n    let b = 2;\n}\n",
+            1,
+        ),
+        ("inside-block.py", "def f():\n    a = 1\n    b = 2\n", 1),
+        ("inside-block.mk", "all:\n\t@echo ok\n\t@echo done\n", 1),
+    ] {
+        let path = temporary(name);
+        fs::write(&path, original).unwrap();
+        let mut app = App::new(smart_newline_config(), Some(path.clone())).unwrap();
+        app.mode = Mode::Insert;
+        let caret = app.buffers[0].line_to_offset(row) + app.buffers[0].line_len(row);
+        app.replace_active_selection(Selection::point(caret));
+
+        app.edit_newline();
+
+        let line = app.buffers[0].line_string(row);
+        let indent: String = line
+            .chars()
+            .take_while(|character| matches!(character, ' ' | '\t'))
+            .collect();
+        assert_eq!(
+            app.buffers[0].line_string(row + 1),
+            indent,
+            "{name}: {original:?}"
+        );
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn syntax_newline_adds_one_level_below_a_row_that_opens_a_block() {
+    // `row_indent` is the opening row's own indentation; one default
+    // four-space level goes on top of it.
+    for (name, original, row, row_indent) in [
+        ("opens-block.yaml", "root:\n  a: 1\n", 0, ""),
+        ("opens-block.yaml", "a: |\n  text\n", 0, ""),
+        (
+            "opens-block.json",
+            "{\n  \"a\": {\n    \"b\": 1\n  }\n}\n",
+            1,
+            "  ",
+        ),
+        (
+            "opens-block.py",
+            "def f():\n    if x:\n        a()\n    elif y:\n        b()\n    else:\n        c()\n",
+            3,
+            "    ",
+        ),
+        (
+            "opens-block.py",
+            "def f():\n    try:\n        a()\n    except E:\n        b()\n    finally:\n        c()\n",
+            5,
+            "    ",
+        ),
+        (
+            "opens-block.sh",
+            "if a; then\n    b\nelse\n    c\nfi\n",
+            2,
+            "",
+        ),
+        (
+            "opens-block.lua",
+            "if a then\n    b()\nelseif c then\n    d()\nend\n",
+            2,
+            "",
+        ),
+    ] {
+        let path = temporary(name);
+        fs::write(&path, original).unwrap();
+        let mut app = App::new(smart_newline_config(), Some(path.clone())).unwrap();
+        app.mode = Mode::Insert;
+        let caret = app.buffers[0].line_to_offset(row) + app.buffers[0].line_len(row);
+        app.replace_active_selection(Selection::point(caret));
+
+        app.edit_newline();
+
+        assert_eq!(
+            app.buffers[0].line_string(row + 1),
+            format!("{row_indent}    "),
+            "{name}: {original:?}"
+        );
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
 fn smart_newline_uses_the_required_make_recipe_tab() {
     let path = temporary("syntax-indent.mk");
     let original = "all:\n";
@@ -2937,7 +3037,9 @@ fn syntax_newline_multiline_selection_uses_normalized_insertion_row_in_both_dire
     app.replace_active_selection(Selection::single(Range::new(to, from)));
     app.edit_newline();
     assert_eq!(text(&app), forward);
-    assert_eq!(forward, "fn outer() {\n    \n        two();\n}\n");
+    // Row 1 is the insertion row: its four spaces, not row 2's eight, and no
+    // extra level because nothing opens on it.
+    assert_eq!(forward, "fn outer() {\n    \n    two();\n}\n");
     fs::remove_file(path).unwrap();
 }
 
@@ -3228,4 +3330,375 @@ fn buffer_picker_closes_hidden_buffers_across_filter_preserving_visible_and_dirt
         "original"
     );
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn syntax_newline_adds_a_level_exactly_below_rows_that_open_one() {
+    // (file, text, row Enter is pressed at the end of, whether the new row
+    // is one level deeper than that row). The opening rows include ones
+    // whose construct began on an earlier row, has no body yet, or does
+    // not parse, which only the token ending the row identifies.
+    let cases: &[(&str, &str, usize, bool)] = &[
+        ("p.go", "func f() {\n    a()\n}\n", 0, true),
+        ("p.go", "type S struct {\n    x int\n}\n", 0, true),
+        ("p.go", "type I interface {\n    F()\n}\n", 0, true),
+        ("p.go", "var x = S{\n    x: 1,\n}\n", 0, true),
+        (
+            "p.go",
+            "func f() {\n    select {\n    case <-c:\n        a()\n    }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.swift",
+            "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.swift",
+            "if a {\n    b()\n} else {\n    c()\n}\n",
+            2,
+            true,
+        ),
+        ("p.swift", "class C {\n    var x = 1\n}\n", 0, true),
+        ("p.swift", "let f = {\n    print(1)\n}\n", 0, true),
+        ("p.py", "def g():\n    if x:\n    y = 1\n", 1, true),
+        ("p.py", "def f():\n    if x\n    y = 1\n", 1, false),
+        // Recovery inserts a MISSING colon after a(), not after case 1.
+        (
+            "p.go",
+            "package p\nfunc f() {\n    switch x {\n    case 1\n        a()\n    }\n}\n",
+            4,
+            false,
+        ),
+        ("p.py", "def g():\n    for i in r:\n    y = 1\n", 1, true),
+        (
+            "p.py",
+            "class C:\n    def f(self):\n    def g(self):\n        pass\n",
+            1,
+            true,
+        ),
+        (
+            "p.py",
+            "def f(\n    a,\n    b) -> int:\n    return a\n",
+            2,
+            true,
+        ),
+        (
+            "p.py",
+            "def f(\n    a,\n    b,\n) -> int:\n    return a\n",
+            3,
+            true,
+        ),
+        ("p.py", "with open(\n    x\n) as f:\n    pass\n", 2, true),
+        ("p.py", "d = {\"a\": 1, \"b\": 2}\nx = 1\n", 0, false),
+        ("p.py", "def f():\n    return 1  # done\n", 1, false),
+        ("p.py", "def f():  # note\n    return 1\n", 0, true),
+        ("p.yaml", "root:\n  a: 1\n  newkey:\n  b: 2\n", 2, true),
+        ("p.yaml", "a: 1\nnewkey:\nb: 2\n", 1, true),
+        ("p.yaml", "a: 1\nb: 2\n", 0, false),
+        ("p.yaml", "url: http://x.y\nb: 2\n", 0, false),
+        (
+            "p.swift",
+            "func f() {\n    if a {\n        b()\n    }\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.swift",
+            "func f() {\n    for x in y {\n        b()\n    }\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.swift",
+            "func f() {\n    guard a else {\n        return\n    }\n}\n",
+            1,
+            true,
+        ),
+        ("p.swift", "func f() {\n    b()\n}\n", 1, false),
+        (
+            "p.rs",
+            "fn f() {\n    let s = Foo {\n        a: 1,\n    };\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.rs",
+            "fn f() {\n    let s = Foo {\n        a: 1,\n    };\n}\n",
+            2,
+            false,
+        ),
+        (
+            "p.rs",
+            "mod m {\n    enum E {\n        A,\n    }\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.rs",
+            "impl S {\n    fn new(\n        a: u8,\n    ) -> Self {\n        S\n    }\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.rs",
+            "impl S {\n    fn new(\n        a: u8,\n    ) -> Self {\n        S\n    }\n}\n",
+            3,
+            true,
+        ),
+        (
+            "p.rs",
+            "fn f() {\n    match x {\n        A =>\n            1,\n    }\n}\n",
+            2,
+            true,
+        ),
+        ("p.rs", "fn f() {\n    let a = 1; // note {\n}\n", 1, false),
+        ("p.rs", "fn f() { // note\n    a();\n}\n", 0, true),
+        (
+            "p.go",
+            "func f() {\n    g(\n        1,\n    )\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.go",
+            "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.go",
+            "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
+            2,
+            true,
+        ),
+        (
+            "p.go",
+            "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
+            3,
+            false,
+        ),
+        (
+            "p.go",
+            "func f() {\n    switch x {\n    case 1:\n        a()\n    default:\n        b()\n    }\n}\n",
+            4,
+            true,
+        ),
+        (
+            "p.go",
+            "func f() {\n    select {\n    case <-c:\n        a()\n    }\n}\n",
+            2,
+            true,
+        ),
+        ("p.go", "var (\n    a = 1\n)\n", 0, true),
+        (
+            "p.c",
+            "int f() {\n    switch (x) {\n    case 1:\n        a();\n    default:\n        b();\n    }\n}\n",
+            2,
+            true,
+        ),
+        (
+            "p.c",
+            "int f() {\n    switch (x) {\n    case 1:\n        a();\n    default:\n        b();\n    }\n}\n",
+            4,
+            true,
+        ),
+        (
+            "p.c",
+            "int f() {\n    switch (x) {\n    case 1:\n        a();\n    default:\n        b();\n    }\n}\n",
+            3,
+            false,
+        ),
+        ("p.c", "int f() {\n    g(\n        1);\n}\n", 1, true),
+        (
+            "p.js",
+            "function f() {\n    switch (x) {\n        case 1:\n            a();\n        default:\n            b();\n    }\n}\n",
+            2,
+            true,
+        ),
+        (
+            "p.js",
+            "function f() {\n    switch (x) {\n        case 1:\n            a();\n        default:\n            b();\n    }\n}\n",
+            4,
+            true,
+        ),
+        (
+            "p.js",
+            "function f() {\n    return (\n        1\n    );\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.js",
+            "function f() {\n    return (\n        <div>\n            <span>x</span>\n        </div>\n    );\n}\n",
+            2,
+            true,
+        ),
+        (
+            "p.jsx",
+            "const a = (\n    <div>\n        x\n    </div>\n);\n",
+            1,
+            true,
+        ),
+        (
+            "p.java",
+            "class D {\n    void f(int x) {\n        switch (x) {\n            case 1:\n                a();\n            default:\n                b();\n        }\n    }\n}\n",
+            3,
+            true,
+        ),
+        (
+            "p.java",
+            "class D {\n    void f(int x) {\n        switch (x) {\n            case 1:\n                a();\n            default:\n                b();\n        }\n    }\n}\n",
+            5,
+            true,
+        ),
+        (
+            "p.java",
+            "class D {\n    void g(\n        int a) {\n    }\n}\n",
+            1,
+            true,
+        ),
+        (
+            "p.html",
+            "<main>\n    <div\n        class=\"x\">\n        y\n    </div>\n</main>\n",
+            2,
+            true,
+        ),
+        (
+            "p.html",
+            "<main>\n    <img src=\"x\">\n    <p>y</p>\n</main>\n",
+            1,
+            false,
+        ),
+        ("p.sh", "if a\nthen\n    b\nfi\n", 1, true),
+        (
+            "p.lua",
+            "local function f(\n    a,\n    b)\n    return a\nend\n",
+            0,
+            true,
+        ),
+        (
+            "p.kt",
+            "fun f() {\n    when (x) {\n        else ->\n            a()\n    }\n}\n",
+            2,
+            true,
+        ),
+        (
+            "p.cmake",
+            "if(A)\n    message(x)\nelse()\n    message(y)\nendif()\n",
+            2,
+            true,
+        ),
+        (
+            "p.cmake",
+            "if(A)\n    message(x)\nelse()\n    message(y)\nendif()\n",
+            1,
+            false,
+        ),
+        (
+            "p.cpp",
+            "class A {\npublic:\n    int x;\n    int y : 3;\n};\n",
+            1,
+            true,
+        ),
+        (
+            "p.cpp",
+            "class A {\npublic:\n    int x;\n    int y : 3;\n};\n",
+            2,
+            false,
+        ),
+        ("p.yaml", "root:\n  a: 1\n  b: 2\n", 0, true),
+        ("p.yaml", "root:\n  a: 1\n  b: 2\n", 1, false),
+        ("p.yaml", "a: |\n  text\nb: 2\n", 0, true),
+        (
+            "p.json",
+            "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": 2\n  }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.json",
+            "{\n  \"a\": 1,\n  \"b\": {\n    \"c\": 2\n  }\n}\n",
+            2,
+            true,
+        ),
+        (
+            "p.rs",
+            "fn f() {\n    let a = 1;\n    if x {\n        y();\n    } else {\n        z();\n    }\n}\n",
+            1,
+            false,
+        ),
+        (
+            "p.rs",
+            "fn f() {\n    let a = 1;\n    if x {\n        y();\n    } else {\n        z();\n    }\n}\n",
+            4,
+            true,
+        ),
+        (
+            "p.py",
+            "def f():\n    if x:\n        a = 1\n    elif y:\n        b = 2\n    else:\n        c = 3\n",
+            2,
+            false,
+        ),
+        (
+            "p.py",
+            "def f():\n    if x:\n        a = 1\n    elif y:\n        b = 2\n    else:\n        c = 3\n",
+            5,
+            true,
+        ),
+        ("p.mk", "all:\n\t@echo ok\n\t@echo done\n", 0, true),
+        ("p.mk", "all:\n\t@echo ok\n\t@echo done\n", 1, false),
+        ("p.html", "<main>\n    <p>x</p>\n</main>\n", 1, false),
+        ("p.html", "<main>\n    <div>\n</main>\n", 1, true),
+        (
+            "p.html",
+            "<main>\n    <br>\n    <p>y</p>\n</main>\n",
+            1,
+            false,
+        ),
+        (
+            "p.html",
+            "<main>\n    <ul>\n        <li>a</li>\n    </ul>\n</main>\n",
+            1,
+            true,
+        ),
+        ("p.ini", "[editor]\nname=runyte\ncolor=blue\n", 1, false),
+        ("p.css", "main {\n    color: red;\n}\n", 1, false),
+        ("p.toml", "values = [\n    1,\n    2,\n]\n", 1, false),
+    ];
+    let mut failures = Vec::new();
+    for (name, original, row, expect) in cases {
+        let path = temporary(name);
+        fs::write(&path, original).unwrap();
+        let mut app = App::new(smart_newline_config(), Some(path.clone())).unwrap();
+        app.mode = Mode::Insert;
+        let caret = app.buffers[0].line_to_offset(*row) + app.buffers[0].line_len(*row);
+        app.replace_active_selection(Selection::point(caret));
+        let indent = |line: String| -> String {
+            line.chars()
+                .take_while(|character| matches!(character, ' ' | '\t'))
+                .collect()
+        };
+        let before = indent(app.buffers[0].line_string(*row));
+        app.edit_newline();
+        let after = indent(app.buffers[0].line_string(row + 1));
+        let expected = if *expect {
+            format!(
+                "{before}{}",
+                if name.ends_with(".mk") { "\t" } else { "    " }
+            )
+        } else {
+            before.clone()
+        };
+        if after != expected {
+            failures.push(format!(
+                "{name} row {row} {:?}: expected a level: {expect}, got {before:?} -> {after:?}",
+                original.lines().nth(*row).unwrap()
+            ));
+        }
+        fs::remove_file(path).unwrap();
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

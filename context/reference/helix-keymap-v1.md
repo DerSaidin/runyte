@@ -110,7 +110,7 @@ is open. Help's scoped `q` is also globally unbound.
 
 | Sequence | Helix command | Runyte command | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `i`, `a` | insert/append | insert before/after | Implemented | Uses the ordered single selection. |
+| `i`, `a` | insert/append | insert before/after | Implemented | Uses the ordered single selection. Escape after `i` leaves the caret on the character the text went in front of, and after `a` on the last inserted character, as Helix does. At a line end Helix rests on the terminator, which a Runyte caret never occupies, so `a`, `A`, `o`, and `O` all rest on the last inserted character there. The step back never crosses a row start, applies only while the carets are where the session's last edit left them, so an Insert-mode motion or click keeps the caret where it was put, and leaves a caret rather than a range. |
 | `I`, `A` | insert at line start/end | matching insert commands | Implemented | `A` permits insertion after the last character. |
 | `o`, `O` | open below/above | matching open-line commands | Implemented | Preserves the current row's exact leading spaces/tabs and enters Insert mode after them. |
 | `r` + character | `replace` | `replace-char` | Implemented | Replaces each selected character. The argument is consumed literally, so `r Space` inserts a space without opening command hints; a subsequent Space starts the application command tree (`r Space Space`). Runyte remains in Normal mode while it waits and marks the replacement heads red rather than labelling this one-character argument as Insert mode. |
@@ -447,7 +447,7 @@ prefix matching only an alias displays that alias.
 
 | Sequence | Helix command | Runyte command | Status | Notes |
 | --- | --- | --- | --- | --- |
-| Insert `Escape` | normal mode | `enter-normal-mode` | Implemented | Commits the Insert action as one undo checkpoint and clamps the cursor to Normal semantics. |
+| Insert `Escape` | normal mode | `enter-normal-mode` | Implemented | Commits the Insert action as one undo checkpoint and clamps the cursor to Normal semantics. An Insert session opened by `a` first steps each caret back onto the last inserted character; see `i`, `a`. |
 | Insert `Ctrl-\` | no Helix default | `enter-normal-mode` | Added | Leaves Insert for Normal in both buffer and terminal panes. Legacy terminals report `Ctrl-\` as `Ctrl-4`, which is accepted as a compatibility spelling. Repeating it is idempotent over a buffer; over a live Normal terminal it explicitly enters review. |
 | Insert `Ctrl-w` + pane suffix | no Helix default | matching window command | Added | Begins a restricted window namespace without first leaving Insert. Directional and next-pane continuations are available in every Insert view; terminal panes additionally allow vertical/horizontal splits and full-screen/zen toggles. Bare `Ctrl-w` keeps Insert. Close and only-window remain Normal-only. |
 | Insert `Alt-Backspace` | delete previous word | `delete-word-backward` | Implemented · Primary | Unicode-safe. Clears leading indentation before the caret in one press, stopping at the current line's start; can join lines when invoked at column zero. |
