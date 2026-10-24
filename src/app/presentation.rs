@@ -1256,11 +1256,25 @@ impl App {
             self.action_failed("not a Markdown document");
             return;
         }
+        self.show_markdown_page();
+    }
+
+    /// Renders the active Markdown document and shows its page in the active
+    /// pane, with the caret on the text the source caret was on.
+    fn show_markdown_page(&mut self) {
+        let active = self.active().buffer;
         // The page is rendered from the buffer rather than from the file, so it
         // shows the work in progress rather than the last thing saved.
         let rendered = crate::markdown::render(&self.buffers[active].to_string());
         let source_offset = self.active().head();
         let offset = rendered.positions.to_page(source_offset);
+        // Another pane can be reading the page this regenerates.
+        let existing = self.buffers.iter().enumerate().find_map(|(page, buffer)| {
+            (!self.closed_buffers.contains(&page)
+                && buffer.markdown_render_source() == Some(active))
+            .then_some(page)
+        });
+        let readers = existing.map(|page| self.markdown_page_readers(page));
         // Named the way every other generated view is: the pane title says
         // what the page is, and a file's directory is not part of that. A
         // pathless buffer is named by its display name with the brackets
@@ -1288,13 +1302,11 @@ impl App {
             rendered.text(),
             ContentAlignment::default(),
         );
-        self.generated_highlights
-            .insert(buffer, rendered.spans().to_vec());
-        self.generated_highlights_revision = self.generated_highlights_revision.wrapping_add(1);
+        self.install_markdown_render(buffer, rendered);
+        if let Some(readers) = readers {
+            self.restore_markdown_page_readers(buffer, readers);
+        }
         let revision = self.buffers[buffer].revision();
-        self.buffers[buffer].wrap_cache.tables =
-            crate::table_layout::Tables::new(revision, rendered.tables);
-        self.markdown_positions.insert(buffer, rendered.positions);
         self.active_mut().markdown_origin = Some(super::MarkdownOrigin {
             source: active,
             source_offset,
@@ -1306,6 +1318,150 @@ impl App {
         self.active_mut().preserve_scroll = false;
         let message = self.key_text(crate::key_spelling::actionable::MARKDOWN_SOURCE);
         self.status(message);
+    }
+
+    /// Attaches what rendering produced besides the text to the page holding
+    /// it: the colour spans, the table geometry, and the map back to the
+    /// source. The tables are keyed to the page's current revision, so this
+    /// runs after the text is in place, and the source is unchanged since it
+    /// was rendered.
+    fn install_markdown_render(
+        &mut self,
+        page: usize,
+        rendered: crate::markdown::RenderedMarkdown,
+    ) {
+        self.generated_highlights
+            .insert(page, rendered.spans().to_vec());
+        self.generated_highlights_revision = self.generated_highlights_revision.wrapping_add(1);
+        let revision = self.buffers[page].revision();
+        self.buffers[page].wrap_cache.tables =
+            crate::table_layout::Tables::new(revision, rendered.tables);
+        self.markdown_positions.insert(page, rendered.positions);
+        self.note_markdown_rendered_from(page);
+    }
+
+    fn note_markdown_rendered_from(&mut self, page: usize) {
+        if let Some(source) = self.buffers[page].markdown_render_source() {
+            self.markdown_rendered_from
+                .insert(page, self.buffers[source].revision());
+        }
+    }
+
+    /// Where each pane showing `page` is, as a source offset. A source offset
+    /// survives regenerating the page, which a page offset does not.
+    fn markdown_page_readers(&self, page: usize) -> Vec<(usize, usize)> {
+        let Some(positions) = self.markdown_positions.get(&page) else {
+            return Vec::new();
+        };
+        self.panes
+            .iter()
+            .filter(|(_, pane)| pane.buffer == page)
+            .map(|(id, pane)| (*id, positions.to_source(pane.head())))
+            .collect()
+    }
+
+    fn restore_markdown_page_readers(&mut self, page: usize, readers: Vec<(usize, usize)>) {
+        let Some(positions) = self.markdown_positions.get(&page) else {
+            return;
+        };
+        for (id, source_offset) in readers {
+            let offset = positions.to_page(source_offset);
+            if let Some(pane) = self.panes.get_mut(&id) {
+                pane.replace_selection(Selection::point(offset));
+                pane.preserve_scroll = false;
+            }
+        }
+    }
+
+    /// Brings a rendered page up to date with its document when a pane
+    /// arrives at it from history or the buffer list rather than through `?`.
+    ///
+    /// A page is otherwise rendered only when it is asked for, so arriving at
+    /// it after an edit would show text the document no longer has. Panes
+    /// already reading it keep their place through the source offset their
+    /// caret corresponds to.
+    pub(super) fn refresh_markdown_page(&mut self, page: usize) {
+        let Some(source) = self.buffers[page].markdown_render_source() else {
+            return;
+        };
+        if self.closed_buffers.contains(&source)
+            || self.markdown_rendered_from.get(&page) == Some(&self.buffers[source].revision())
+        {
+            return;
+        }
+        let rendered = crate::markdown::render(&self.buffers[source].to_string());
+        if self.buffers[page].to_string() == rendered.text() {
+            // The same text can still carry different emphasis. Freshly
+            // rendered positions are exact where mapped ones are nearest, and
+            // replacing them leaves drawing alone.
+            if self
+                .generated_highlights
+                .get(&page)
+                .is_some_and(|spans| spans.as_slice() == rendered.spans())
+            {
+                self.markdown_positions.insert(page, rendered.positions);
+                self.note_markdown_rendered_from(page);
+            } else {
+                self.install_markdown_render(page, rendered);
+            }
+            return;
+        }
+        let readers = self.markdown_page_readers(page);
+        self.buffers[page].replace_virtual_text(rendered.text());
+        self.install_markdown_render(page, rendered);
+        self.restore_markdown_page_readers(page, readers);
+    }
+
+    /// The rendered page this pane showed more recently than `source` itself.
+    ///
+    /// The pane's buffer history already orders everything it has shown, so
+    /// it answers which of the two it last left without a second record that
+    /// could disagree with it. Closing the page removes it from that history,
+    /// which is what makes closing it a return to the source.
+    fn remembered_markdown_page(&self, source: usize) -> Option<usize> {
+        self.active()
+            .buffer_history
+            .iter()
+            .rev()
+            .find_map(|&shown| {
+                if shown == source {
+                    Some(None)
+                } else if !self.closed_buffers.contains(&shown)
+                    && self.buffers[shown].markdown_render_source() == Some(source)
+                {
+                    Some(Some(shown))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    }
+
+    /// Shows the rendered page of the document the active pane has just
+    /// opened by name, when that page is how the pane last showed it.
+    ///
+    /// `was_showing` is the buffer the pane held before opening, so asking
+    /// for the source a pane is already showing leaves it there.
+    pub(super) fn resume_markdown_page(&mut self, was_showing: usize) {
+        let source = self.active().buffer;
+        if source == was_showing
+            || self.active().terminal.is_some()
+            || self.remembered_markdown_page(source).is_none()
+            || !self.is_markdown_document(source)
+        {
+            return;
+        }
+        // The source was passed through on the way to the page rather than
+        // visited, so jumping back and the previous destination lead to where
+        // the person came from. The buffer history keeps it, so closing the
+        // page falls back to its document.
+        let pane = self.active();
+        let jumps = pane.jumps.clone();
+        let destinations = pane.destination_history.clone();
+        self.show_markdown_page();
+        let pane = self.active_mut();
+        pane.jumps = jumps;
+        pane.destination_history = destinations;
     }
 
     /// Whether a buffer holds a Markdown document Runyte can render.

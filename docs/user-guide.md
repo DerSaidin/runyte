@@ -342,6 +342,9 @@ Special buffers:
   ninth retires the least recent one once it is detached;
 - stay available while dirty, until saved or discarded.
 
+A rendered Markdown page is the exception: it is neither counted nor retired
+while its document is open, and it closes with that document.
+
 A pathless scratch buffer is ordinary text, not a special buffer.
 
 For example, `Space g l` opens a Git-log buffer for ordinary browsing, while
@@ -2056,8 +2059,11 @@ one.
 - This keeps `Ctrl-o`/`Ctrl-i` and `Alt-o`/`Alt-i` useful without letting
   `Space b b` or the Finder accumulate stale views.
 - A dirty special buffer stays open until saved or discarded.
-- An empty, clean scratch buffer retires as soon as its last pane leaves.
-  Written scratch text is an ordinary buffer.
+- A rendered Markdown page is not counted and stays while its document is
+  open; it closes with the document.
+- An empty, clean scratch buffer retires as soon as its last pane leaves,
+  unless a pane is reading its rendered page. Written scratch text is an
+  ordinary buffer.
 
 ### Directory buffers
 
@@ -4125,6 +4131,30 @@ keeps every editing key.
   actually on screen.
 - It is rendered from the buffer, not the file, so it shows unsaved work.
   Rendering the same document again reuses and regenerates its one page.
+  Returning to the page through `Ctrl-o`/`Alt-o`, the buffer list, or the
+  previous destination regenerates it too when the document has changed,
+  keeping the caret on the same text.
+
+**Each pane remembers which you left.** Opening a document by name shows it
+the way that pane last showed it: if you left it on its page, you come back to
+the page; if you left it in the source, you come back to the source.
+
+- This applies to `:open`, `:split`/`:vsplit` with a path, choosing the
+  document by name in the Finder (`Space f`), the directory tree, explorer
+  entries, Git changed-file rows, `gf` on a file, and links to
+  `file.md#heading`, which land on the page's heading. Native launch targets
+  without a position follow this memory too. The page's own
+  `[rendered]` row in the Finder always opens the page.
+- A request for a place to edit still opens the source: a Finder content
+  match, a diagnostic, a definition or reference, a native launch target with
+  a position, and any host or `--wait` open request.
+- The buffer list keeps one row for the document and one for its page, and
+  each row opens exactly that.
+- Panes remember separately, so one can keep the source while another reads
+  the page. A split starts with what the pane it came from remembered.
+- The page lives as long as its document. Closing the document closes its
+  page, and the retention limit for hidden generated buffers never removes
+  it. Closing the page itself means the document opens as source again.
 
 **The scratch buffer** renders too while `editor.scratch_markdown` is on — the
 same option that makes `Space p r` refill it as Markdown. Its page is named

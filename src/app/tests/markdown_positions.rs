@@ -157,13 +157,21 @@ fn goto_file_from_rendered_markdown_uses_the_source_directory_after_edits() {
             app.apply_to_buffer(source, &Transaction::insert(0, "A new paragraph\n\n"));
         }
         let page = app.active().buffer;
-        let current = text(&app);
-        let label = offset(&current, "the file") + 2;
-        let bare_path = current[..current.rfind("target.txt").unwrap()]
-            .chars()
-            .count();
-        for position in [label, bare_path] {
-            app.switch_buffer(page);
+        for label in [true, false] {
+            // The first link is followed on the still-stale page. Returning
+            // for the bare path refreshes it, so locate that path in the
+            // current page rather than reusing an offset from before arrival.
+            if app.active().buffer != page {
+                app.switch_buffer(page);
+            }
+            let current = text(&app);
+            let position = if label {
+                offset(&current, "the file") + 2
+            } else {
+                current[..current.rfind("target.txt").unwrap()]
+                    .chars()
+                    .count()
+            };
             app.active_mut()
                 .replace_selection(Selection::point(position));
             press(&mut app, 'g');

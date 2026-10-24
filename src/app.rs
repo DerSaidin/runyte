@@ -2875,6 +2875,9 @@ pub struct App {
     #[cfg(test)]
     pub(crate) visible_pane_rebuilds: std::cell::Cell<usize>,
     markdown_positions: HashMap<usize, crate::markdown::PositionMap>,
+    /// The source revision each rendered page was last rendered from, so a
+    /// page reached again without an edit in between is not rendered again.
+    markdown_rendered_from: HashMap<usize, u64>,
     /// Stale trees retain translated highlighting but expose no structural
     /// query while their replacement is being parsed.
     stale_syntax: HashMap<usize, StaleSyntax>,
@@ -3651,6 +3654,7 @@ impl App {
             #[cfg(test)]
             visible_pane_rebuilds: std::cell::Cell::new(0),
             markdown_positions: HashMap::new(),
+            markdown_rendered_from: HashMap::new(),
             stale_syntax: HashMap::new(),
             syntax_worker: None,
             defer_syntax,

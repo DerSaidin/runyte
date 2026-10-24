@@ -197,6 +197,7 @@ impl App {
         if !file.is_file() {
             return self.open_file(file);
         }
+        let was_showing = self.active().buffer;
         self.open_file(file.clone())?;
         let buffer = self.active().buffer;
         // A binary file is handed to an external program instead and leaves
@@ -209,12 +210,27 @@ impl App {
             return Ok(());
         }
         let text = self.buffers[buffer].text().to_string();
-        match crate::markdown::heading_anchor(&text, fragment) {
-            Some(offset) => {
+        let heading = crate::markdown::heading_anchor(&text, fragment);
+        if let Some(offset) = heading {
+            let pane = self.active_mut();
+            pane.replace_selection(Selection::point(offset.line));
+            pane.preserve_scroll = false;
+        }
+        self.resume_markdown_page(was_showing);
+        let page = self.active().buffer;
+        match heading {
+            // The page shows the heading's text without its markers, so the
+            // caret lands there, as `#heading` does within a page.
+            Some(offset) if page != buffer => {
+                let offset = self
+                    .markdown_positions
+                    .get(&page)
+                    .map_or(0, |positions| positions.to_page(offset.text));
                 let pane = self.active_mut();
-                pane.replace_selection(Selection::point(offset.line));
+                pane.replace_selection(Selection::point(offset));
                 pane.preserve_scroll = false;
             }
+            Some(_) => {}
             None => self.action_failed(format!("heading not found: #{fragment}")),
         }
         Ok(())
@@ -339,7 +355,7 @@ impl App {
     ) -> Result<()> {
         match candidates.as_slice() {
             [] => self.action_failed(format!("path not found: {requested_text}")),
-            [path] => self.open_file(path.clone())?,
+            [path] => self.open_document(path.clone())?,
             _ => {
                 let items = candidates
                     .iter()
@@ -479,7 +495,7 @@ impl App {
             self.status("no directory entry on this row");
             return Ok(());
         };
-        self.open_file(path)?;
+        self.open_document(path)?;
         // An explorer entry is an object to visit, not text to keep
         // extending. This also collapses a selection produced by `/` before
         // the next buffer or directory listing receives input. A dirty
@@ -1001,12 +1017,26 @@ impl App {
 
     /// Native frontend launch targets use the same path as explorer and :open.
     pub fn open_native_target(&mut self, target: crate::launch::LaunchTarget) -> Result<()> {
+        let Some(position) = target.position else {
+            return self.open_document(target.path);
+        };
         self.open_file(target.path)?;
-        if let Some(position) = target.position {
-            let buffer = self.active().buffer;
-            self.launch_positions.insert(buffer, position);
-            self.apply_pending_launch_position(buffer);
-        }
+        let buffer = self.active().buffer;
+        self.launch_positions.insert(buffer, position);
+        self.apply_pending_launch_position(buffer);
+        Ok(())
+    }
+
+    /// Opens a document the way a person asks for one by name — `:open`, the
+    /// Finder, the directory tree, an explorer entry, or `gf` — and shows it
+    /// the way this pane last showed it: a Markdown document last read as its
+    /// rendered page opens on that page. A request for a position in the
+    /// text, such as a diagnostic or a definition, goes through
+    /// [`App::open_file`] and opens the source.
+    pub(super) fn open_document(&mut self, path: PathBuf) -> Result<()> {
+        let was_showing = self.active().buffer;
+        self.open_file(path)?;
+        self.resume_markdown_page(was_showing);
         Ok(())
     }
 
@@ -1657,6 +1687,7 @@ impl App {
             if self.active_terminal().is_some() {
                 self.leave_terminal();
             }
+            self.refresh_markdown_page(buffer_id);
             return;
         }
         let refreshed = self.refresh_background_buffer(buffer_id);
@@ -1704,6 +1735,7 @@ impl App {
         if refreshed {
             self.normalize_buffer(buffer_id);
         }
+        self.refresh_markdown_page(buffer_id);
         self.lsp_touch(buffer_id);
         self.status(format!("buffer {}", self.buffers[buffer_id].display_name()));
     }
@@ -2305,6 +2337,16 @@ impl App {
             }
             ReloadDispatch::File => self.reload_file(),
         }
+    }
+
+    /// Splits the active pane and opens `path` in the new one by name, as
+    /// [`App::open_document`] does. The new pane inherits the history it
+    /// remembers views by from the pane it was split from.
+    pub(super) fn split_document(&mut self, axis: Axis, path: PathBuf) -> Result<()> {
+        let was_showing = self.active().buffer;
+        self.split(axis, Some(path))?;
+        self.resume_markdown_page(was_showing);
+        Ok(())
     }
 
     pub(super) fn split(&mut self, axis: Axis, path: Option<PathBuf>) -> Result<()> {

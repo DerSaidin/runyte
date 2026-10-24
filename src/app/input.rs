@@ -3305,7 +3305,7 @@ impl App {
                     // resumes through the ordinary path with a clean buffer.
                     Some(path) => {
                         self.buffers[confirmation.buffer].mark_saved();
-                        self.open_file(path)?;
+                        self.open_document(path)?;
                         if let Some(entry) = confirmation.focus_entry {
                             self.focus_directory_entry(&entry);
                         }
@@ -4131,8 +4131,9 @@ impl App {
                 let target = self.picker.as_ref().and_then(FilePicker::selected_target);
                 if let Some(target) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Vertical, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4140,8 +4141,9 @@ impl App {
                 let target = self.picker.as_ref().and_then(FilePicker::selected_target);
                 if let Some(target) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Horizontal, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4289,8 +4291,9 @@ impl App {
         }
         if let Some(target) = result? {
             self.close_file_picker();
+            let was_showing = self.active().buffer;
             self.open_file(target.path.clone())?;
-            self.select_picker_target(&target);
+            self.land_on_picker_target(&target, was_showing);
         }
         Ok(())
     }
@@ -4390,8 +4393,9 @@ impl App {
                     .and_then(|(finder, picker)| finder.selected_target(picker));
                 if let Some(FinderTarget::File(target)) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Vertical, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4403,8 +4407,9 @@ impl App {
                     .and_then(|(finder, picker)| finder.selected_target(picker));
                 if let Some(FinderTarget::File(target)) = target {
                     self.close_file_picker();
+                    let was_showing = self.active().buffer;
                     self.split(Axis::Horizontal, Some(target.path.clone()))?;
-                    self.select_picker_target(&target);
+                    self.land_on_picker_target(&target, was_showing);
                 }
                 return Ok(());
             }
@@ -4443,6 +4448,16 @@ impl App {
         }
         self.refresh_finder_preview();
         Ok(())
+    }
+
+    /// Lands on what a picker row named: the line of a content match, or,
+    /// for a row naming only a file, the view this pane last showed it in.
+    pub(super) fn land_on_picker_target(&mut self, target: &PickerTarget, was_showing: usize) {
+        if target.row.is_some() {
+            self.select_picker_target(target);
+        } else {
+            self.resume_markdown_page(was_showing);
+        }
     }
 
     pub(super) fn select_picker_target(&mut self, target: &PickerTarget) {
@@ -5908,13 +5923,13 @@ impl App {
             }
             (EditorCommand::SplitVertical, InvocationParameters::OptionalPath(path)) => {
                 return match path {
-                    Some(path) => self.split(Axis::Horizontal, Some(path)),
+                    Some(path) => self.split_document(Axis::Horizontal, path),
                     None => self.execute_editor_command(EditorCommand::SplitVertical),
                 };
             }
             (EditorCommand::SplitHorizontal, InvocationParameters::OptionalPath(path)) => {
                 return match path {
-                    Some(path) => self.split(Axis::Vertical, Some(path)),
+                    Some(path) => self.split_document(Axis::Vertical, path),
                     None => self.execute_editor_command(EditorCommand::SplitHorizontal),
                 };
             }
@@ -6528,7 +6543,7 @@ impl App {
                 self.open_service_health();
                 Ok(())
             }
-            (Colon::Open, InvocationParameters::Path(path)) => self.open_file(path),
+            (Colon::Open, InvocationParameters::Path(path)) => self.open_document(path),
             (Colon::Detach, InvocationParameters::None) => {
                 self.request_detach();
                 Ok(())
