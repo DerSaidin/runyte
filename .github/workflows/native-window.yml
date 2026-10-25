@@ -39,6 +39,7 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   native:
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}native (${{ matrix.os }})
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source

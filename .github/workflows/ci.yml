@@ -27,7 +27,7 @@ env:
 
 jobs:
   source:
-    name: Resolve CI source
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Resolve CI source
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -43,7 +43,7 @@ jobs:
 
   installer:
     needs: source
-    name: Installer (${{ matrix.os }})
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Installer (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +64,7 @@ jobs:
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source
-    name: Native Windows
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Native Windows
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -175,7 +175,7 @@ jobs:
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source
-    name: Dependency advisories
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Dependency advisories
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -195,7 +195,7 @@ jobs:
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source
-    name: Gates (ubuntu-latest)
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Gates (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -232,7 +232,7 @@ jobs:
 
   plugin-conformance:
     needs: source
-    name: Plugin conformance (${{ matrix.os }})
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Plugin conformance (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -346,7 +346,7 @@ jobs:
 
   ru-time:
     needs: [source, plugin-conformance]
-    name: ru-time moving head against this commit (${{ matrix.os }})
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}ru-time moving head against this commit (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     # Moving external development is advisory. Immutable supported plugins run
@@ -395,7 +395,7 @@ jobs:
 
   plugin-inventory:
     needs: source
-    name: Immutable plugin inventory
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Immutable plugin inventory
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -412,7 +412,7 @@ jobs:
         run: python3 docs/plugins/compatibility/check_inventory.py --verify-upstream --github-output "$GITHUB_OUTPUT"
 
   frozen-plugin:
-    name: Frozen plugin ${{ matrix.plugin.id }} (${{ matrix.os }})
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Frozen plugin ${{ matrix.plugin.id }} (${{ matrix.os }})
     needs: [source, plugin-inventory, plugin-conformance]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -462,7 +462,7 @@ jobs:
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source
-    name: Tests (macos-latest)
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Tests (macos-latest)
     runs-on: macos-latest
     timeout-minutes: 45
     env:
@@ -493,7 +493,7 @@ jobs:
 
   lifecycle-stress:
     needs: source
-    name: Lifecycle stress (${{ matrix.os }})
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Lifecycle stress (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -538,7 +538,7 @@ jobs:
 
   performance:
     needs: source
-    name: Performance (${{ matrix.os }})
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Performance (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -569,7 +569,7 @@ jobs:
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source
-    name: Release build floor (ubuntu-22.04)
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Release build floor (ubuntu-22.04)
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -590,7 +590,7 @@ jobs:
     # A failed source resolver must fail required checks, not skip them green.
     if: ${{ !cancelled() }}
     needs: source
-    name: MSRV (Rust 1.88)
+    name: ${{ github.event_name == 'schedule' && 'Nightly ' || '' }}MSRV (Rust 1.88)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

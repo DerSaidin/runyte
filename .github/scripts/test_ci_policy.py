@@ -58,8 +58,10 @@ class WorkflowPolicyTests(unittest.TestCase):
             self.assertEqual(commands[command]['if'], "runner.os == 'Linux'")
 
     def test_required_names_run_canonical_coverage_without_exclusions(self):
-        self.assertEqual(self.ci['jobs']['gates']['name'], 'Gates (ubuntu-latest)')
-        self.assertEqual(self.ci['jobs']['macos']['name'], 'Tests (macos-latest)')
+        self.assertEqual(self.ci['jobs']['gates']['name'],
+                         "${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Gates (ubuntu-latest)")
+        self.assertEqual(self.ci['jobs']['macos']['name'],
+                         "${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Tests (macos-latest)")
         for job in ('gates', 'macos'):
             steps = self.ci['jobs'][job]['steps']
             measurement = [s for s in steps if s.get('uses') == './.github/actions/core-coverage']

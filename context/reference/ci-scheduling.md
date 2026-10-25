@@ -26,7 +26,9 @@ separate keys; LLVM instrumentation remains in cargo-llvm-cov's own target tree.
 
 Scheduled workflows are loaded from the default branch by GitHub. Each resolves
 dev to one SHA before its jobs begin, and every repository checkout in that run
-uses that SHA. The two nightly workflows can resolve different dev commits if
+uses that SHA. Nightly check names have a `Nightly` prefix: GitHub associates
+scheduled runs with the default-branch SHA, and a dev result must not substitute
+for a required check on main. The two nightly workflows can resolve different dev commits if
 dev advances between them. Their concurrency groups are separate from main push
 runs, so a nightly run cannot cancel validation of a release commit. Schedules
 become active only after these workflow definitions reach the default branch.
