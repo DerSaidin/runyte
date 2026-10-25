@@ -6754,8 +6754,9 @@ running configuration left exactly as it was, so a half-written file cannot
 break a live editor. A file replaced atomically by a rename is read as its new
 contents; one truncated and rewritten in place can be caught mid-write, which
 fails as invalid YAML and can simply be reloaded again. A path that never had a
-file says so without treating it as a deletion, so creating the file and
-reloading again is the way to start using one mid-session.
+file is not treated as a deletion: the reload reads the `themes.d` and
+`keybinds.d` directories beside it on their own, as startup does, and creating
+the file and reloading again is the way to start using one mid-session.
 
 Settings that were read before the editor existed are reported rather than
 adopted. `editor.mouse`, `lsp.enable`, `workspace.mode`, `workspace.state`, and
@@ -6847,8 +6848,10 @@ was.
   whole.
 - A file rewritten in place can be caught half-written. That fails as invalid
   YAML; reload again once the write finishes.
-- A path that never had a file is reported as missing, not as deleted. Create
-  the file and reload to start using it mid-session.
+- A path that never had a file is not treated as deleted. The reload reads
+  `themes.d` and `keybinds.d` beside it, so editing a key file there takes
+  effect without a configuration file. Create the file and reload to start
+  using it mid-session.
 
 **What applies immediately:** everything except the restart settings below.
 That includes the theme, `notifications.history_limit`, and the `keys`

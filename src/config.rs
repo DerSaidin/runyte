@@ -26,6 +26,26 @@ mod zenbones;
 pub use fragments::{KEYBINDS_DIRECTORY, PREFIXES_FILE, THEMES_DIRECTORY};
 pub use paths::default_config_root;
 
+/// What [`Config::reload`] read.
+#[derive(Debug)]
+pub enum Reloaded {
+    /// The configuration file, with the directories beside it.
+    File(Config),
+    /// No configuration file, only the directories beside where it would be.
+    Fragments(Config),
+}
+
+#[cfg(test)]
+impl Reloaded {
+    /// The configuration, if it came from the file itself.
+    fn file(self) -> Option<Config> {
+        match self {
+            Self::File(config) => Some(config),
+            Self::Fragments(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -1220,15 +1240,7 @@ impl Config {
         match fs::symlink_metadata(&path) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // Themes and key files can stand without a configuration
-                // file beside them.
-                let mut config = Self::default();
-                config.merge_fragments(&path)?;
-                config
-                    .validate_settings()
-                    .map_err(anyhow::Error::msg)
-                    .with_context(|| format!("invalid settings beside {}", path.display()))?;
-                return Ok((config, Some(path)));
+                return Ok((Self::read_fragments(&path)?, Some(path)));
             }
             Err(error) => {
                 return Err(error)
@@ -1242,18 +1254,20 @@ impl Config {
 
     /// Re-reads a configuration file that a running editor already loaded.
     ///
-    /// `Ok(None)` means there is no file at that path. The caller decides what
-    /// that is worth: at startup an absent file is simply the built-in
-    /// defaults, but replacing a running editor's whole configuration with
-    /// defaults because a file was deleted mid-session would be a far larger
-    /// change than a reload was asked to make.
+    /// [`Reloaded::Fragments`] means there is no file at that path, only
+    /// whatever `themes.d` and `keybinds.d` beside it hold. The caller decides
+    /// what that is worth: an editor that started without the file adopts
+    /// it, since that is exactly what startup would read, but replacing a
+    /// running editor's whole configuration with defaults because a file was
+    /// deleted mid-session would be a far larger change than a reload was
+    /// asked to make.
     ///
     /// Reading through the path is what makes an atomically replaced file
     /// reload correctly: the rename is observed as the new contents, never as
     /// a half-written document. An editor that truncates and rewrites in place
     /// can still be caught mid-write, which fails here as invalid YAML and so
     /// leaves the working configuration untouched.
-    pub fn reload(path: &Path) -> Result<Option<Self>> {
+    pub fn reload(path: &Path) -> Result<Reloaded> {
         anyhow::ensure!(
             path.is_absolute(),
             "config path {} is not absolute",
@@ -1261,13 +1275,27 @@ impl Config {
         );
         match fs::symlink_metadata(path) {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self::read_fragments(path).map(Reloaded::Fragments);
+            }
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("failed to inspect config {}", path.display()));
             }
         }
-        Self::read(path).map(Some)
+        Self::read(path).map(Reloaded::File)
+    }
+
+    /// The configuration when `path` itself does not exist: the built-ins,
+    /// with the themes and key files that can stand beside it on their own.
+    fn read_fragments(path: &Path) -> Result<Self> {
+        let mut config = Self::default();
+        config.merge_fragments(path)?;
+        config
+            .validate_settings()
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("invalid settings beside {}", path.display()))?;
+        Ok(config)
     }
 
     /// The one parse, merge, and validation path every load shares: the file,
@@ -2075,10 +2103,10 @@ themes:
 
         // Absent is reported as absent rather than as the built-in defaults,
         // so a caller holding a working configuration can decide what it means.
-        assert!(Config::reload(&path).unwrap().is_none());
+        assert!(Config::reload(&path).unwrap().file().is_none());
 
         fs::write(&path, "editor:\n  tab_width: 6\n").unwrap();
-        let reloaded = Config::reload(&path).unwrap().unwrap();
+        let reloaded = Config::reload(&path).unwrap().file().unwrap();
         assert_eq!(reloaded.editor.tab_width, 6);
         // Built-in themes and servers are merged exactly as at startup.
         assert!(reloaded.themes.contains_key(DEFAULT_THEME));
@@ -2105,7 +2133,15 @@ themes:
 
         fs::rename(&staged, &path).unwrap();
 
-        assert_eq!(Config::reload(&path).unwrap().unwrap().editor.tab_width, 12);
+        assert_eq!(
+            Config::reload(&path)
+                .unwrap()
+                .file()
+                .unwrap()
+                .editor
+                .tab_width,
+            12
+        );
     }
 
     #[cfg(unix)]
