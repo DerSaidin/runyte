@@ -209,6 +209,18 @@ jobs:
           # job token in .git/config would put it within reach of one.
           persist-credentials: false
 
+      # Nightlies test dev source with helpers from the workflow revision.
+      # Keep the source tree and its own packaging invariants unchanged.
+      - name: Check out CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tools
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Keep helper checkout out of candidate source snapshots
+        run: echo '/.ci-tools/' >> .git/info/exclude
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: coverage-ubuntu-latest
@@ -217,7 +229,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/ci-policy"
           "$RUNNER_TEMP/ci-policy/bin/pip" install PyYAML==6.0.2
-          "$RUNNER_TEMP/ci-policy/bin/python" -m unittest discover -s .github/scripts -p 'test_*.py' -v
+          "$RUNNER_TEMP/ci-policy/bin/python" -m unittest discover -s .ci-tools/.github/scripts -p 'test_*.py' -v
 
       - name: Check formatting
         run: cargo fmt --check
@@ -226,7 +238,7 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test with coverage and enforce the baseline
-        uses: ./.github/actions/core-coverage
+        uses: ./.ci-tools/.github/actions/core-coverage
         with:
           runner: ubuntu-latest
 
@@ -248,6 +260,18 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha || '0000000000000000000000000000000000000000' }}
           persist-credentials: false
+
+      # Nightlies test dev source with helpers from the workflow revision.
+      # Keep the source tree and its own packaging invariants unchanged.
+      - name: Check out CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tools
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Keep helper checkout out of candidate source snapshots
+        run: echo '/.ci-tools/' >> .git/info/exclude
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -334,7 +358,7 @@ jobs:
       - name: Prepare tested host artifact
         env:
           HOST_VERSION: ${{ steps.candidate.outputs.host_version }}
-        run: python3 .github/scripts/plugin_host.py pack "$RUNNER_TEMP/plugin-host" "$CARGO_TARGET_DIR/debug/runyte" --version "$HOST_VERSION"
+        run: python3 .ci-tools/.github/scripts/plugin_host.py pack "$RUNNER_TEMP/plugin-host" "$CARGO_TARGET_DIR/debug/runyte" --version "$HOST_VERSION"
       - name: Share tested host
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -366,6 +390,18 @@ jobs:
           ref: ${{ needs.source.outputs.sha || '0000000000000000000000000000000000000000' }}
           persist-credentials: false
 
+      # Nightlies test dev source with helpers from the workflow revision.
+      # Keep the source tree and its own packaging invariants unchanged.
+      - name: Check out CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tools
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Keep helper checkout out of candidate source snapshots
+        run: echo '/.ci-tools/' >> .git/info/exclude
+
       - name: Prepare the exact host or 0.4 candidate
         id: candidate
         run: python3 docs/plugins/compatibility/candidate.py --candidate-version 0.4.0 --destination "$RUNNER_TEMP/runyte-candidate" --github-output "$GITHUB_OUTPUT"
@@ -384,7 +420,7 @@ jobs:
       - name: Verify and install the tested host
         env:
           HOST_VERSION: ${{ steps.candidate.outputs.host_version }}
-        run: python3 .github/scripts/plugin_host.py restore "$RUNNER_TEMP/plugin-host" "$CARGO_TARGET_DIR/debug/runyte" --version "$HOST_VERSION"
+        run: python3 .ci-tools/.github/scripts/plugin_host.py restore "$RUNNER_TEMP/plugin-host" "$CARGO_TARGET_DIR/debug/runyte" --version "$HOST_VERSION"
 
       # RUNYTE_BIN enables ru-time's real-editor test, which is skipped otherwise.
       - name: Test ru-time
@@ -430,6 +466,19 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha || '0000000000000000000000000000000000000000' }}
           persist-credentials: false
+
+      # Nightlies test dev source with helpers from the workflow revision.
+      # Keep the source tree and its own packaging invariants unchanged.
+      - name: Check out CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tools
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Keep helper checkout out of candidate source snapshots
+        run: echo '/.ci-tools/' >> .git/info/exclude
+
       - name: Prepare the exact host or 0.4 candidate
         id: candidate
         run: python3 docs/plugins/compatibility/candidate.py --candidate-version 0.4.0 --destination "$RUNNER_TEMP/runyte-candidate" --github-output "$GITHUB_OUTPUT"
@@ -448,7 +497,7 @@ jobs:
       - name: Verify and install the tested host
         env:
           HOST_VERSION: ${{ steps.candidate.outputs.host_version }}
-        run: python3 .github/scripts/plugin_host.py restore "$RUNNER_TEMP/plugin-host" "$CARGO_TARGET_DIR/debug/runyte" --version "$HOST_VERSION"
+        run: python3 .ci-tools/.github/scripts/plugin_host.py restore "$RUNNER_TEMP/plugin-host" "$CARGO_TARGET_DIR/debug/runyte" --version "$HOST_VERSION"
       - name: Install isolated schema validator
         run: |
           python3 -m venv "$RUNNER_TEMP/frozen-schema"
@@ -480,6 +529,18 @@ jobs:
           ref: ${{ needs.source.outputs.sha || '0000000000000000000000000000000000000000' }}
           persist-credentials: false
 
+      # Nightlies test dev source with helpers from the workflow revision.
+      # Keep the source tree and its own packaging invariants unchanged.
+      - name: Check out CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tools
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Keep helper checkout out of candidate source snapshots
+        run: echo '/.ci-tools/' >> .git/info/exclude
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: coverage-macos-latest
@@ -487,7 +548,7 @@ jobs:
       # PTY handling and terminal emulation are where macOS and Linux diverge,
       # so the suite runs in full here rather than just building.
       - name: Test with coverage and enforce the baseline
-        uses: ./.github/actions/core-coverage
+        uses: ./.ci-tools/.github/actions/core-coverage
         with:
           runner: macos-latest
 

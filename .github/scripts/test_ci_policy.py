@@ -39,7 +39,8 @@ class WorkflowPolicyTests(unittest.TestCase):
                 self.assertIn('source', job['needs'])
                 checkouts = [s for s in job['steps']
                              if s.get('uses', '').startswith('actions/checkout@')
-                             and 'repository' not in s.get('with', {})]
+                             and 'repository' not in s.get('with', {})
+                             and s.get('with', {}).get('path') != '.ci-tools']
                 self.assertEqual(len(checkouts), 1, name)
                 self.assertEqual(checkouts[0]['with']['ref'],
                                  "${{ needs.source.outputs.sha || '0000000000000000000000000000000000000000' }}")
@@ -64,7 +65,7 @@ class WorkflowPolicyTests(unittest.TestCase):
                          "${{ github.event_name == 'schedule' && 'Nightly ' || '' }}Tests (macos-latest)")
         for job in ('gates', 'macos'):
             steps = self.ci['jobs'][job]['steps']
-            measurement = [s for s in steps if s.get('uses') == './.github/actions/core-coverage']
+            measurement = [s for s in steps if s.get('uses') == './.ci-tools/.github/actions/core-coverage']
             self.assertEqual(len(measurement), 1)
             self.assertNotIn('if', measurement[0])
             self.assertNotIn('continue-on-error', measurement[0])
@@ -99,3 +100,12 @@ class WorkflowPolicyTests(unittest.TestCase):
             commands = '\n'.join(s.get('run', '') for s in job['steps'])
             self.assertIn('plugin_host.py restore', commands)
             self.assertNotIn('cargo build', commands)
+
+    def test_helpers_follow_workflow_revision_not_scheduled_source(self):
+        for name in ('gates', 'macos', 'plugin-conformance', 'ru-time', 'frozen-plugin'):
+            steps = self.ci['jobs'][name]['steps']
+            helpers = [s for s in steps if s.get('with', {}).get('path') == '.ci-tools']
+            self.assertEqual(len(helpers), 1)
+            self.assertEqual(helpers[0]['with']['ref'], '${{ github.workflow_sha }}')
+            self.assertEqual(helpers[0]['with']['sparse-checkout'], '.github')
+            self.assertEqual(helpers[0]['with']['persist-credentials'], 'false')

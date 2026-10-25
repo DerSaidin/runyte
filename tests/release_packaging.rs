@@ -152,7 +152,7 @@ fn ci_enforces_the_committed_dependency_graph() {
             if step["run"].as_str() == Some(command) {
                 return true;
             }
-            if step["uses"].as_str() != Some("./.github/actions/core-coverage") {
+            if step["uses"].as_str() != Some("./.ci-tools/.github/actions/core-coverage") {
                 return false;
             }
             let action = fs::read_to_string(

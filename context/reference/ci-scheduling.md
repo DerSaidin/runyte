@@ -26,7 +26,14 @@ separate keys; LLVM instrumentation remains in cargo-llvm-cov's own target tree.
 
 Scheduled workflows are loaded from the default branch by GitHub. Each resolves
 dev to one SHA before its jobs begin, and every repository checkout in that run
-uses that SHA. Nightly check names have a `Nightly` prefix: GitHub associates
+uses that SHA for the source under test. Jobs that use repository CI helpers
+separately check out `.github` from `github.workflow_sha` into an ignored
+`.ci-tools` directory. This lets the current workflow test dev even before dev
+adopts its new helper files, without rewriting the tested source or its own
+packaging tests. Direct dev/exp pushes switch to slim checks when those branches
+adopt the workflow changes.
+
+Nightly check names have a `Nightly` prefix: GitHub associates
 scheduled runs with the default-branch SHA, and a dev result must not substitute
 for a required check on main. The two nightly workflows can resolve different dev commits if
 dev advances between them. Their concurrency groups are separate from main push
