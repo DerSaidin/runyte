@@ -17,6 +17,39 @@ cargo build --release
 benchmarks/run.py
 ```
 
+## 2026-10-25 — commented defaults and larger configured keymaps
+
+Follow-up to [issue #31](https://github.com/runyte/runyte/issues/31): export
+keeps explicit assignments active and writes built-in defaults as comments.
+A default-only export therefore has no active `keys` section and skips
+configured-keymap compilation on load. The assignment limit is 65,536;
+this is an admission ceiling, not a promise of fast startup at that size.
+
+`cargo bench --bench config_export` measures component costs in-process in a
+release build. Each value is the median of three samples after one warm-up.
+The compilation measurement retains both fast-pane-key variants together.
+Export includes prospective validation and file replacement. Load reads the
+exported files but does not compile keys. Files live in temporary directories.
+These are not complete editor-readiness measurements.
+
+| Explicit assignments | Load (ms) | Compile both variants (ms) | Export (ms) |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.945 | skipped | 16.716 |
+| 1 | 0.910 | 31.705 | 49.006 |
+| 1,400 | 3.809 | 138.424 | 212.787 |
+| 65,536 | 57.965 | 7,616.074 | 9,846.959 |
+
+Rejection of 65,536 conflicting assignments across both variants took
+11,326.158 ms. Diagnostic lookup indexes the first violation per assignment
+instead of scanning all violations for each rejected rule.
+
+Measured on Linux x86-64, AMD Ryzen AI 9 365, Rust 1.97.1. Other builds were
+active on the machine; treat these values as an observed capacity check, not
+an isolated baseline or a comparison with the earlier measurements below.
+At the ceiling, compilation and export take seconds. Ordinary custom keymaps
+still pay the existing configured-compilation cost; `:write-config` is not a
+startup cache.
+
 ## 2026-10-18 — configuration directories and written keymaps
 
 Configuration loading now lists `themes.d/` and `keybinds.d/` beside the

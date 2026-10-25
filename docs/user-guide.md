@@ -6408,15 +6408,29 @@ language server, including the built-in ones. Themes and keys go into
 | --- | --- |
 | `themes.d/<name>.yaml` | Each theme that is not exactly a built-in one. Built-in themes are not written. |
 | `keybinds.d/00-prefixes.yaml` | `leader`, `window`, and `rebind`, when any are set. |
-| `keybinds.d/normal.yaml`, `select.yaml`, `insert.yaml`, `replace.yaml` | Every key that does something in that mode, under `bind`: the built-in keys and your own, so each can be changed in place. |
+| `keybinds.d/normal.yaml`, `select.yaml`, `insert.yaml`, `replace.yaml` | Explicit bindings under `bind`, with built-in defaults as commented examples. |
 
 A theme whose name is not a portable file name, or differs from another only
 in letter case, stays inline under `themes:`. The built-in keys left out of
 the mode files are the ones `bind` cannot express, such as count keys, and
 `Ctrl-h`/`j`/`k`/`l`, so `editor.fast_pane_keys` keeps choosing those. Both
-still come from the built-in keymap. Written-out built-in keys are bindings
-like any other, so a key Runyte later moves keeps its old meaning in that
-file.
+still come from the built-in keymap. Commented defaults stay supplied by Runyte,
+so they can receive future default changes and do not consume the custom
+binding allowance. Explicit assignments stay active, including assignments
+that happen to match a current default, `null` removals, and action sequences.
+
+For a mode with custom bindings, uncomment an example entry to customize it.
+For a mode with no assignments, uncomment its `bind:` and mode headings too:
+
+```yaml
+# bind:
+#   normal:
+#     w: move-word-forward
+```
+
+An export with no custom keys leaves all four mode files as comments; loading
+it does not activate custom-keymap compilation. Exporting is a way to inspect
+and edit configuration, not a startup optimization.
 
 Without a path it writes the per-user configuration file,
 `$XDG_CONFIG_HOME/runyte/config.yaml` or `~/.config/runyte/config.yaml`
@@ -6428,15 +6442,18 @@ Nothing is written if any of these files already exists, and the refusal
 names it; `:write-config! [path]` replaces them. Other files in `themes.d/`
 and `keybinds.d/` are left alone and are still read. A symlink's target is
 replaced and the link itself is kept, as a settings change does. Each file is
-written atomically, the configuration file last, and all of them are read
-back together before any is written, so what lands on disk is always a
-configuration Runyte accepts.
+written atomically, with the configuration file last. Before writing, Runyte
+validates the generated documents together with retained destination fragments,
+in their load order. It checks both fast-pane-key variants and the 256-file
+limit in each directory. A validation failure leaves all files untouched.
+An I/O failure during writing can still leave a partial set of updated files;
+the multi-file export is not one filesystem transaction.
 
 What is written is the saved configuration. A setting read at startup and
 changed since, such as `editor.mouse`, is written with its new value even
 though the running editor keeps its launch value until a restart. The written
-files carry no comments, and maps are written in name order, so writing the
-same configuration twice produces the same text.
+files contain generated keybinding examples, but do not preserve comments from
+the original files. Maps are written in name order for deterministic output.
 
 ### Editing the file and reloading
 
@@ -7045,7 +7062,7 @@ Paste stays literal, and macros record the physical keys you press, as before.
 
 | Limit | Value |
 | --- | --- |
-| Assignments in `keys.bind`, across all files | 2,048 |
+| Assignments in `keys.bind`, across all files | 65,536 |
 | Keys per sequence | 8 |
 | Actions per binding | 16 |
 | Argument length | 4,096 bytes, no control characters |

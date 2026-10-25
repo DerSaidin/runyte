@@ -8,7 +8,7 @@
 //! one and over what the configuration file says inline.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -33,19 +33,30 @@ impl Config {
     /// Adds the themes and key fragments found beside `path`, the
     /// configuration file, whether or not that file exists.
     pub(crate) fn merge_fragments(&mut self, path: &Path) -> Result<()> {
+        self.merge_prospective_fragments(path, &[])
+    }
+
+    /// Read the destination as it would exist after replacing the generated
+    /// files. Retained fragments participate in the same ordering and limits
+    /// as an ordinary load, without creating files during validation.
+    pub(crate) fn merge_prospective_fragments(
+        &mut self,
+        path: &Path,
+        generated: &[(PathBuf, String)],
+    ) -> Result<()> {
         let directory = path.parent().unwrap_or(Path::new("."));
-        for file in yaml_files(&directory.join(THEMES_DIRECTORY))? {
+        for (file, source) in prospective_files(directory, THEMES_DIRECTORY, generated)? {
+            let source = source.cloned().map(Ok).unwrap_or_else(|| read(&file))?;
             let name = file
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .with_context(|| format!("theme file {} is not named in UTF-8", file.display()))?
                 .to_owned();
-            let source = read(&file)?;
             self.merge_theme_source(name, &source)
                 .with_context(|| format!("invalid theme in {}", file.display()))?;
         }
-        for file in yaml_files(&directory.join(KEYBINDS_DIRECTORY))? {
-            let source = read(&file)?;
+        for (file, source) in prospective_files(directory, KEYBINDS_DIRECTORY, generated)? {
+            let source = source.cloned().map(Ok).unwrap_or_else(|| read(&file))?;
             self.merge_keys_source(&source)
                 .with_context(|| format!("invalid YAML in {}", file.display()))?;
         }
@@ -96,14 +107,43 @@ impl Config {
         }
         let mut files = vec![(file_name.to_path_buf(), main.to_yaml()?)];
         files.extend(themes);
-        if let Some(keys) = keys {
-            for (name, fragment) in split_keys(keys) {
-                files.push((
-                    Path::new(KEYBINDS_DIRECTORY).join(name),
+        let examples = crate::keymap::actions::default_bindings(keys.as_ref());
+        let mut fragments = keys
+            .map(split_keys)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, fragment)| {
+                Ok((
+                    name,
                     serde_yaml::to_string(&fragment).context("failed to serialize keys")?,
-                ));
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        for mode in BIND_MODES {
+            let text = fragments.entry(format!("{mode}.yaml")).or_default();
+            // A comment-only file remains empty YAML: exporting defaults alone
+            // must not create a keys section or trigger configured compilation.
+            if text.is_empty() {
+                text.push_str("# Built-in defaults. Uncomment bind, the mode, and entries to customize.\n# bind:\n");
+                text.push_str(&format!("#   {mode}:\n"));
+            } else {
+                text.push_str(
+                    "\n# Built-in defaults. Uncomment individual entries to customize.\n",
+                );
+            }
+            if let Some(entries) = examples.get(mode).filter(|entries| !entries.is_empty()) {
+                for line in serde_yaml::to_string(entries)?.lines() {
+                    text.push_str("#     ");
+                    text.push_str(line);
+                    text.push('\n');
+                }
             }
         }
+        files.extend(
+            fragments
+                .into_iter()
+                .map(|(name, text)| (Path::new(KEYBINDS_DIRECTORY).join(name), text)),
+        );
         Ok(files)
     }
 }
@@ -158,6 +198,9 @@ fn split_keys(keys: Value) -> Vec<(String, Value)> {
     if let Some(Value::Mapping(bind)) = prefixes.get_mut("bind") {
         for mode in BIND_MODES {
             if let Some(entries) = bind.remove(mode) {
+                if entries.as_mapping().is_some_and(Mapping::is_empty) {
+                    continue;
+                }
                 let mut modes = Mapping::new();
                 modes.insert(mode.into(), entries);
                 let mut fragment = Mapping::new();
@@ -217,6 +260,28 @@ fn yaml_files(directory: &Path) -> Result<Vec<PathBuf>> {
 
 fn read(path: &Path) -> Result<String> {
     Config::read_source(path).with_context(|| format!("failed to read config {}", path.display()))
+}
+
+fn prospective_files<'a>(
+    directory: &Path,
+    kind: &str,
+    generated: &'a [(PathBuf, String)],
+) -> Result<BTreeMap<PathBuf, Option<&'a String>>> {
+    let folder = directory.join(kind);
+    let mut files = yaml_files(&folder)?
+        .into_iter()
+        .map(|path| (path, None))
+        .collect::<BTreeMap<_, _>>();
+    for (relative, source) in generated {
+        if relative.parent() == Some(Path::new(kind)) {
+            let target = directory.join(relative);
+            files.insert(target, Some(source));
+        }
+    }
+    if files.len() > MAX_FILES {
+        bail!("{} has more than {MAX_FILES} .yaml files", folder.display());
+    }
+    Ok(files)
 }
 
 #[cfg(test)]

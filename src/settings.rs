@@ -1076,9 +1076,10 @@ pub fn persist_setting(
 /// Nothing is written if any of those files, or a link to one, exists,
 /// unless `replace` is set. When it is, they are replaced, a symlink's target
 /// rather than the link as [`persist_setting`] does, and any other file in the
-/// two directories is left alone. Every document is read back together
-/// before anything is written, so what this produces is a configuration the
-/// loader accepts. The configuration file is written last.
+/// two directories is left alone. Before writing, validate the generated files
+/// together with retained destination fragments in load order, including file
+/// counts and both keymap variants. Validation failure changes no files; an I/O
+/// failure while writing can leave a partial export. The main file is last.
 pub fn write_config(
     path: &Path,
     config: &Config,
@@ -1104,21 +1105,28 @@ pub fn write_config(
     let (main, fragments) = files
         .split_first()
         .expect("the configuration file is always among the files written");
-    parse_config_with(&main.1, |config| {
-        for (relative, text) in fragments {
-            let merged = match relative.strip_prefix(crate::config::THEMES_DIRECTORY) {
-                Ok(theme) => {
-                    let name = theme.file_stem().unwrap_or_default().to_string_lossy();
-                    config.merge_theme_source(name.into_owned(), text)
-                }
-                Err(_) => config.merge_keys_source(text),
-            };
-            merged.map_err(|error| {
-                SettingError::InvalidConfig(format!("{}: {error:#}", relative.display()))
-            })?;
-        }
-        Ok(())
+    let prospective = parse_config_with(&main.1, |config| {
+        config
+            .merge_prospective_fragments(path, fragments)
+            .map_err(|error| SettingError::InvalidConfig(format!("{error:#}")))
     })?;
+    if let Some(keys) = prospective.keys.as_ref() {
+        for fast in [false, true] {
+            let compiled =
+                crate::keymap::configured::compile(keys, &crate::keymap::keymap_for(fast));
+            if let Some(error) = compiled.errors.first() {
+                let remaining = compiled.errors.len() - 1;
+                let suffix = if remaining == 0 {
+                    String::new()
+                } else {
+                    format!(" ({remaining} more key errors)")
+                };
+                return Err(SettingError::InvalidConfig(format!(
+                    "keys with editor.fast_pane_keys={fast}: {error}{suffix}"
+                )));
+            }
+        }
+    }
     let mut written = Vec::new();
     for (relative, text) in fragments.iter().chain([main]) {
         let target = directory.join(relative);
@@ -2414,11 +2422,18 @@ mod tests {
         let written = write_config(&path, &config, true).unwrap();
         assert_eq!(
             written,
-            [directory.path("keybinds.d/normal.yaml"), path.clone()]
+            [
+                directory.path("keybinds.d/insert.yaml"),
+                directory.path("keybinds.d/normal.yaml"),
+                directory.path("keybinds.d/replace.yaml"),
+                directory.path("keybinds.d/select.yaml"),
+                path.clone(),
+            ]
         );
-        assert_eq!(
-            fs::read_to_string(directory.path("keybinds.d/normal.yaml")).unwrap(),
-            "bind:\n  normal:\n    F5: save\n"
+        assert!(
+            fs::read_to_string(directory.path("keybinds.d/normal.yaml"))
+                .unwrap()
+                .starts_with("bind:\n  normal:\n    F5: save\n")
         );
         // A file it did not write is left where it was.
         assert_eq!(

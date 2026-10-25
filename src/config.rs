@@ -1335,8 +1335,8 @@ impl Config {
         Ok(source)
     }
 
-    /// The whole effective configuration as a YAML document, built-in themes
-    /// and language servers included.
+    /// The saved configuration as a YAML document, including language servers
+    /// and only themes that differ from the built-ins.
     ///
     /// Maps are written in key order so the same configuration always
     /// produces the same text. Reading the document back yields this

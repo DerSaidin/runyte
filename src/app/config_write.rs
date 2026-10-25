@@ -10,8 +10,8 @@
 //!
 //! Custom themes and the `keys` section are written as files of their own
 //! beside the configuration file, in `themes.d` and `keybinds.d`. The keys are
-//! the whole effective keymap spelled out under `bind`, one file per mode, so
-//! every key that does something is listed and each can be changed in place.
+//! explicit assignments under `bind`, one file per mode, with unchanged
+//! built-in bindings shown as commented examples.
 
 use std::path::PathBuf;
 
@@ -31,11 +31,7 @@ impl App {
             );
             return;
         };
-        let mut config = self.persisted_config.clone();
-        config.keys = Some(crate::keymap::actions::effective_section(
-            config.keys.as_ref(),
-        ));
-        match write_config(&target, &config, replace) {
+        match write_config(&target, &self.persisted_config, replace) {
             Ok(written) => {
                 let beside = written.len().saturating_sub(1);
                 self.status(format!(

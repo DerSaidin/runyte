@@ -10,9 +10,8 @@ use crate::input::KeyCode;
 use serde_yaml::{Mapping, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// Room for every built-in binding written out by `:write-config`, which is
-/// several hundred, and as many again of a person's own.
-const MAX_BINDINGS: usize = 2048;
+/// Bound the work and storage of configured assignments across all mode files.
+pub const MAX_BINDINGS: usize = 65_536;
 const MAX_ACTIONS: usize = 16;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 
@@ -331,7 +330,9 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
             .sum::<usize>()
             > MAX_BINDINGS
     {
-        errors.push("bind rejected: at most 4 modes and 2048 assignments are allowed".into());
+        errors.push(format!(
+            "bind rejected: at most 4 modes and {MAX_BINDINGS} assignments are allowed"
+        ));
         return base;
     }
     let mut rules = Vec::new();
@@ -512,14 +513,23 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
             candidate.rebuild_lookup_index();
             return candidate;
         }
+        // Keep the first diagnostic for each rule without rescanning every
+        // violation for every assignment. Large sets of conflicting prefixes
+        // must be cheap to reject as well as valid maps being cheap to admit.
+        let mut violation_by_rule = HashMap::new();
+        for violation in &violations {
+            for sequence in &violation.sequences {
+                violation_by_rule
+                    .entry((violation.mode, sequence))
+                    .or_insert(violation);
+            }
+        }
         let mut rejected = false;
         for (index, rule) in rules.iter().enumerate() {
             if !active[index] {
                 continue;
             }
-            if let Some(violation) = violations.iter().find(|violation| {
-                violation.mode == rule.mode && violation.sequences.contains(&rule.sequence)
-            }) {
+            if let Some(violation) = violation_by_rule.get(&(rule.mode, &rule.sequence)) {
                 active[index] = false;
                 rejected = true;
                 errors.push(format!(
@@ -540,38 +550,25 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
 /// The modes `keys.bind` accepts, in the order they are written.
 const BIND_MODES: [Mode; 4] = [Mode::Normal, Mode::Select, Mode::Insert, Mode::Replace];
 
-/// The `keys` section `:write-config` writes: `section` with every built-in
-/// binding of the keymap it compiles to spelled out under `bind`.
-///
-/// A person's own `bind` entries are kept as written, `null` included, and
-/// win over the built-in binding on the same key. Compiled against the keymap
-/// without fast pane keys and leaving those keys out, so `editor.fast_pane_keys`
-/// goes on choosing them in the written file. A binding `bind` cannot express,
-/// such as one on a reserved count key, is left to the built-in keymap, which
-/// still supplies it. A section or `bind` that is not a mapping is returned
-/// unchanged, so its error is reported again when the file is read.
-pub fn effective_section(section: Option<&Value>) -> Value {
-    let mut section = match section {
-        None => Mapping::new(),
-        Some(Value::Mapping(mapping)) => mapping.clone(),
-        Some(other) => return other.clone(),
-    };
-    let own_bind = match section.remove("bind") {
-        None => Mapping::new(),
-        Some(Value::Mapping(mapping)) => mapping,
-        Some(other) => {
-            section.insert("bind".into(), other);
-            return Value::Mapping(section);
-        }
-    };
-    let mut configured = section.clone();
-    configured.insert("bind".into(), Value::Mapping(own_bind.clone()));
+/// Built-in assignments for commented export examples, after prefix remapping.
+/// Explicit assignments are omitted, including null removals. Compile only the
+/// prefix/remap section: the examples never need to materialize custom rules.
+/// Fast pane keys and sequences `bind` cannot express stay implicit.
+pub(crate) fn default_bindings(section: Option<&Value>) -> BTreeMap<&'static str, Mapping> {
+    let mut section = section
+        .and_then(Value::as_mapping)
+        .cloned()
+        .unwrap_or_default();
+    let own_bind = section.remove("bind");
     let keymap =
-        super::configured::compile(&Value::Mapping(configured), &super::keymap_for(false)).keymap;
+        super::configured::compile(&Value::Mapping(section), &super::keymap_for(false)).keymap;
 
-    let mut bind = Mapping::new();
+    let mut bind = BTreeMap::new();
     for mode in BIND_MODES {
-        let own = own_bind.get(mode_name(mode)).and_then(Value::as_mapping);
+        let own = own_bind
+            .as_ref()
+            .and_then(|bind| bind.get(mode_name(mode)))
+            .and_then(Value::as_mapping);
         let claimed = own
             .into_iter()
             .flatten()
@@ -595,25 +592,13 @@ pub fn effective_section(section: Option<&Value>) -> Value {
                 entries.entry(sequence.to_string()).or_insert(action);
             }
         }
-        let mut written = entries
+        let written = entries
             .into_iter()
             .map(|(sequence, action)| (Value::String(sequence), action))
             .collect::<Mapping>();
-        if let Some(own) = own {
-            written.extend(own.clone());
-        }
-        if !written.is_empty() {
-            bind.insert(mode_name(mode).into(), Value::Mapping(written));
-        }
+        bind.insert(mode_name(mode), written);
     }
-    // A mode name `bind` does not accept is kept so it is reported again.
-    for (mode, entries) in own_bind {
-        if !bind.contains_key(&mode) {
-            bind.insert(mode, entries);
-        }
-    }
-    section.insert("bind".into(), Value::Mapping(bind));
-    Value::Mapping(section)
+    bind
 }
 
 /// The sequence a `bind` key names, as [`parse_rule`] reads it.
@@ -674,7 +659,7 @@ pub fn reference() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BIND_MODES, effective_section, reference};
+    use super::{BIND_MODES, reference};
     use crate::keymap::{Binding, BindingScope, KeySequence, Keymap, Lookup, configured};
     use std::collections::BTreeSet;
 
@@ -728,12 +713,12 @@ mod tests {
 
     #[test]
     fn bind_admits_up_to_its_assignment_limit() {
-        // Four letters after F12 per entry: distinct, equally long, and clear
+        // Five letters after F12 per entry: distinct, equally long, and clear
         // of the count keys.
         let section = |count: usize| {
             let mut source = String::from("bind:\n  normal:\n");
             for n in 0..count {
-                let letters = format!("{n:04}")
+                let letters = format!("{n:05}")
                     .bytes()
                     .map(|digit| char::from(b'a' + digit - b'0').to_string())
                     .collect::<Vec<_>>()
@@ -749,7 +734,7 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("2048 assignments")),
+                .any(|error| error.contains("65536 assignments")),
             "{errors:?}"
         );
     }
@@ -764,15 +749,30 @@ mod tests {
         ];
         for source in sections {
             let section = source.map(|source| serde_yaml::from_str(source).unwrap());
-            let written = effective_section(section.as_ref());
-            let text = serde_yaml::to_string(&written).unwrap();
-            assert!(text.contains("\n    w: move-word-forward\n"), "{text}");
-            let written: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+            let config = crate::config::Config {
+                keys: section.clone(),
+                ..Default::default()
+            };
+            let files = config
+                .to_files(std::path::Path::new("config.yaml"))
+                .unwrap();
+            let text = files
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("#     w: move-word-forward\n"), "{text}");
+            let mut written = crate::config::Config::default();
+            for (path, text) in &files {
+                if path.starts_with(crate::config::KEYBINDS_DIRECTORY) {
+                    written.merge_keys_source(text).unwrap();
+                }
+            }
             let empty = serde_yaml::Value::Mapping(Default::default());
             for fast in [false, true] {
                 let built_in = crate::keymap::keymap_for(fast);
                 let before = configured::compile(section.as_ref().unwrap_or(&empty), &built_in);
-                let after = configured::compile(&written, &built_in);
+                let after = configured::compile(written.keys.as_ref().unwrap_or(&empty), &built_in);
                 assert_eq!(after.errors, before.errors, "{text}");
                 assert_eq!(dispatch(&after.keymap), dispatch(&before.keymap), "{text}");
             }
