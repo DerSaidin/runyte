@@ -1128,7 +1128,7 @@ pub fn write_config(
     Ok(written)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn parse_config(source: &str) -> Result<Config, SettingError> {
     parse_config_with(source, |_| Ok(()))
 }
