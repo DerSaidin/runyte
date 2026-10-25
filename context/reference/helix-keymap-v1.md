@@ -588,6 +588,17 @@ before the editor exists. A reload keeps their running values and names them as
 requiring a restart; the file's values still become the saved ones the settings
 page offers.
 
+## Configuration write
+
+`:write-config [path]` and `:write-config! [path]` are Implemented,
+command-only identities in the Configuration category with no default binding.
+Helix has no counterpart, so both are deliberate Runyte additions. They write
+the saved configuration, built-in themes and language servers included, as one
+YAML document, to the per-user configuration file when no path is given, even
+when `--config` loaded another file. The plain form refuses to replace an
+existing file or link; the `!` form replaces it, following a symlink to its
+target, the same pairing as `:write` and `:write!`.
+
 ## Workspace LSP permission
 
 `:lsp-trust` is an added, command-only identity in the Language category. It

@@ -7,10 +7,12 @@ use super::{
 };
 use crate::command::{self, CommandId, CommandInvocation, EditorCommand, Mode};
 use crate::input::KeyCode;
-use serde_yaml::Value;
-use std::collections::{BTreeMap, HashSet};
+use serde_yaml::{Mapping, Value};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-const MAX_BINDINGS: usize = 256;
+/// Room for every built-in binding written out by `:write-config`, which is
+/// several hundred, and as many again of a person's own.
+const MAX_BINDINGS: usize = 2048;
 const MAX_ACTIONS: usize = 16;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 
@@ -246,6 +248,17 @@ struct Rule {
     description: String,
 }
 
+/// Whether `sequence` uses a key the grammar keeps for itself in `mode`.
+fn is_reserved(mode: Mode, sequence: &KeySequence) -> bool {
+    sequence.as_slice().iter().enumerate().any(|(index, key)| {
+        (index > 0 && matches!(key.code, KeyCode::Escape | KeyCode::Backspace))
+            || (index == 0
+                && matches!(mode, Mode::Normal | Mode::Select)
+                && key.modifiers.is_empty()
+                && matches!(key.code, KeyCode::Char('1'..='9') | KeyCode::Tab))
+    })
+}
+
 fn parse_rule(mode: Mode, source: &str, value: &Value, base: &Keymap) -> Result<Rule, String> {
     let tokens: Vec<_> = source.split_whitespace().collect();
     if tokens.is_empty() || tokens.len() > 8 {
@@ -261,13 +274,7 @@ fn parse_rule(mode: Mode, source: &str, value: &Value, base: &Keymap) -> Result<
             })
             .collect::<Result<Vec<_>, _>>()?,
     );
-    if sequence.as_slice().iter().enumerate().any(|(index, key)| {
-        (index > 0 && matches!(key.code, KeyCode::Escape | KeyCode::Backspace))
-            || (index == 0
-                && matches!(mode, Mode::Normal | Mode::Select)
-                && key.modifiers.is_empty()
-                && matches!(key.code, KeyCode::Char('1'..='9') | KeyCode::Tab))
-    }) {
+    if is_reserved(mode, &sequence) {
         return Err(
             "sequence uses a reserved count, context-action, or prefix-cancellation key".into(),
         );
@@ -324,7 +331,7 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
             .sum::<usize>()
             > MAX_BINDINGS
     {
-        errors.push("bind rejected: at most 4 modes and 256 assignments are allowed".into());
+        errors.push("bind rejected: at most 4 modes and 2048 assignments are allowed".into());
         return base;
     }
     let mut rules = Vec::new();
@@ -371,51 +378,71 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
             }
         }
     }
+    // Insert and Replace keys a terminal already answers to in the built-in
+    // map; anything else replaced in those modes keeps its built-in meaning
+    // inside terminals.
+    let terminal_keys = base
+        .bindings
+        .iter()
+        .filter(|binding| binding.scope == BindingScope::Terminal)
+        .flat_map(|binding| {
+            binding
+                .modes
+                .iter()
+                .map(move |&mode| (mode, binding.sequence.clone()))
+        })
+        .collect::<HashSet<_>>();
     let mut active = vec![true; rules.len()];
     loop {
         let mut candidate = base.clone();
-        for (rule, enabled) in rules.iter().zip(&active) {
-            if !enabled {
-                continue;
-            }
-            candidate.bindings = candidate
-                .bindings
-                .into_iter()
-                .flat_map(|binding| {
-                    if binding.scope == BindingScope::Global
-                        && binding.sequence == rule.sequence
-                        && binding.is_active_in(rule.mode)
+        // One pass over the bindings for all rules: a written configuration
+        // carries the whole built-in keymap, and a pass per rule would cost
+        // their product at every startup.
+        let mut replaced = HashMap::<&KeySequence, Vec<Mode>>::new();
+        for (rule, _) in rules.iter().zip(&active).filter(|(_, enabled)| **enabled) {
+            replaced.entry(&rule.sequence).or_default().push(rule.mode);
+        }
+        candidate.bindings = candidate
+            .bindings
+            .into_iter()
+            .flat_map(|binding| {
+                let modes = match replaced.get(&binding.sequence) {
+                    Some(modes) if binding.scope == BindingScope::Global => modes
+                        .iter()
+                        .copied()
+                        .filter(|&mode| binding.is_active_in(mode))
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                if modes.is_empty() {
+                    return vec![binding];
+                }
+                let mut retained = binding
+                    .modes
+                    .iter()
+                    .filter(|mode| !modes.contains(mode))
+                    .map(|&mode| {
+                        let mut copy = binding.clone();
+                        copy.modes = mode_slice(mode);
+                        copy
+                    })
+                    .collect::<Vec<_>>();
+                for mode in modes {
+                    if matches!(mode, Mode::Insert | Mode::Replace)
+                        && !terminal_keys.contains(&(mode, binding.sequence.clone()))
                     {
-                        let mut retained = binding
-                            .modes
-                            .iter()
-                            .filter(|&&mode| mode != rule.mode)
-                            .map(|&mode| {
-                                let mut copy = binding.clone();
-                                copy.modes = mode_slice(mode);
-                                copy
-                            })
-                            .collect::<Vec<_>>();
-                        if matches!(rule.mode, Mode::Insert | Mode::Replace)
-                            && !base.bindings.iter().any(|original| {
-                                original.scope == BindingScope::Terminal
-                                    && original.is_active_in(rule.mode)
-                                    && original.sequence == rule.sequence
-                            })
-                        {
-                            let mut terminal = binding.clone();
-                            terminal.scope = BindingScope::Terminal;
-                            terminal.modes = mode_slice(rule.mode);
-                            terminal.alias = None;
-                            terminal.alias_modes = None;
-                            retained.push(terminal);
-                        }
-                        retained
-                    } else {
-                        vec![binding]
+                        let mut terminal = binding.clone();
+                        terminal.scope = BindingScope::Terminal;
+                        terminal.modes = mode_slice(mode);
+                        terminal.alias = None;
+                        terminal.alias_modes = None;
+                        retained.push(terminal);
                     }
-                })
-                .collect();
+                }
+                retained
+            })
+            .collect();
+        for (rule, _) in rules.iter().zip(&active).filter(|(_, enabled)| **enabled) {
             if let Some(first) = rule.actions.first() {
                 let mut binding = Binding::implemented(
                     mode_slice(rule.mode),
@@ -510,6 +537,99 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
     }
 }
 
+/// The modes `keys.bind` accepts, in the order they are written.
+const BIND_MODES: [Mode; 4] = [Mode::Normal, Mode::Select, Mode::Insert, Mode::Replace];
+
+/// The `keys` section `:write-config` writes: `section` with every built-in
+/// binding of the keymap it compiles to spelled out under `bind`.
+///
+/// A person's own `bind` entries are kept as written, `null` included, and
+/// win over the built-in binding on the same key. Compiled against the keymap
+/// without fast pane keys and leaving those keys out, so `editor.fast_pane_keys`
+/// goes on choosing them in the written file. A binding `bind` cannot express,
+/// such as one on a reserved count key, is left to the built-in keymap, which
+/// still supplies it. A section or `bind` that is not a mapping is returned
+/// unchanged, so its error is reported again when the file is read.
+pub fn effective_section(section: Option<&Value>) -> Value {
+    let mut section = match section {
+        None => Mapping::new(),
+        Some(Value::Mapping(mapping)) => mapping.clone(),
+        Some(other) => return other.clone(),
+    };
+    let own_bind = match section.remove("bind") {
+        None => Mapping::new(),
+        Some(Value::Mapping(mapping)) => mapping,
+        Some(other) => {
+            section.insert("bind".into(), other);
+            return Value::Mapping(section);
+        }
+    };
+    let mut configured = section.clone();
+    configured.insert("bind".into(), Value::Mapping(own_bind.clone()));
+    let keymap =
+        super::configured::compile(&Value::Mapping(configured), &super::keymap_for(false)).keymap;
+
+    let mut bind = Mapping::new();
+    for mode in BIND_MODES {
+        let own = own_bind.get(mode_name(mode)).and_then(Value::as_mapping);
+        let claimed = own
+            .into_iter()
+            .flatten()
+            .filter_map(|(source, _)| sequence_for(source.as_str()?, &keymap))
+            .collect::<HashSet<_>>();
+        let mut entries = BTreeMap::new();
+        for binding in keymap.bindings_for_mode(mode) {
+            let sequence = &binding.sequence;
+            if !binding.actions.is_empty()
+                || binding.availability != BindingAvailability::Implemented
+                || matches!(binding.target, BindingTarget::Plugin(_))
+                || sequence.len() > 8
+                || claimed.contains(sequence)
+                || is_reserved(mode, sequence)
+                || matches!(sequence.as_slice(), [key] if super::is_fast_pane_key(*key))
+            {
+                continue;
+            }
+            let action = Value::String(binding.target.name().into());
+            if parse_action(&action, mode).is_ok() {
+                entries.entry(sequence.to_string()).or_insert(action);
+            }
+        }
+        let mut written = entries
+            .into_iter()
+            .map(|(sequence, action)| (Value::String(sequence), action))
+            .collect::<Mapping>();
+        if let Some(own) = own {
+            written.extend(own.clone());
+        }
+        if !written.is_empty() {
+            bind.insert(mode_name(mode).into(), Value::Mapping(written));
+        }
+    }
+    // A mode name `bind` does not accept is kept so it is reported again.
+    for (mode, entries) in own_bind {
+        if !bind.contains_key(&mode) {
+            bind.insert(mode, entries);
+        }
+    }
+    section.insert("bind".into(), Value::Mapping(bind));
+    Value::Mapping(section)
+}
+
+/// The sequence a `bind` key names, as [`parse_rule`] reads it.
+fn sequence_for(source: &str, keymap: &Keymap) -> Option<KeySequence> {
+    source
+        .split_whitespace()
+        .map(|token| match token {
+            "Leader" => Ok(keymap.leader()),
+            "Window" => Ok(keymap.window_prefix()),
+            _ => Key::parse(token),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+        .map(KeySequence::new)
+}
+
 /// Generated from the same mode admission and continuation policy as compilation.
 pub fn reference() -> String {
     use std::fmt::Write;
@@ -554,8 +674,110 @@ pub fn reference() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::reference;
+    use super::{BIND_MODES, effective_section, reference};
+    use crate::keymap::{Binding, BindingScope, KeySequence, Keymap, Lookup, configured};
     use std::collections::BTreeSet;
+
+    /// What `binding` does when its key is pressed, ignoring whether that
+    /// came from the built-in table or from `bind`.
+    fn effect(binding: &Binding) -> String {
+        if binding.is_plain_action() {
+            format!("{:?}", binding.target)
+        } else {
+            format!("{:?}", binding.actions)
+        }
+    }
+
+    fn effects(bindings: &[&Binding]) -> BTreeSet<String> {
+        bindings
+            .iter()
+            .map(|binding| format!("{} {}", binding.sequence, effect(binding)))
+            .collect()
+    }
+
+    /// Every lookup a keystroke could make, in every mode and scope.
+    fn dispatch(keymap: &Keymap) -> Vec<String> {
+        let mut prefixes = std::collections::HashSet::new();
+        for binding in keymap.bindings() {
+            for length in 1..=binding.sequence.len() {
+                prefixes.insert(KeySequence::new(
+                    binding.sequence.as_slice()[..length].iter().copied(),
+                ));
+            }
+        }
+        let mut out = Vec::new();
+        for &scope in BindingScope::ALL {
+            for mode in BIND_MODES {
+                for sequence in &prefixes {
+                    let found = match keymap.lookup_in(mode, scope, sequence) {
+                        Lookup::NoMatch => continue,
+                        Lookup::Exact(binding) => effect(binding),
+                        Lookup::Prefix(continuations) => format!("{:?}", effects(&continuations)),
+                        Lookup::ExactAndPrefix {
+                            exact,
+                            continuations,
+                        } => format!("{} {:?}", effect(exact), effects(&continuations)),
+                    };
+                    out.push(format!("{scope:?} {mode:?} {sequence}: {found}"));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn bind_admits_up_to_its_assignment_limit() {
+        // Four letters after F12 per entry: distinct, equally long, and clear
+        // of the count keys.
+        let section = |count: usize| {
+            let mut source = String::from("bind:\n  normal:\n");
+            for n in 0..count {
+                let letters = format!("{n:04}")
+                    .bytes()
+                    .map(|digit| char::from(b'a' + digit - b'0').to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                source.push_str(&format!("    F12 {letters}: save\n"));
+            }
+            serde_yaml::from_str::<serde_yaml::Value>(&source).unwrap()
+        };
+        let built_in = crate::keymap::keymap_for(false);
+        let errors = configured::compile(&section(super::MAX_BINDINGS), &built_in).errors;
+        assert!(errors.is_empty(), "{errors:?}");
+        let errors = configured::compile(&section(super::MAX_BINDINGS + 1), &built_in).errors;
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("2048 assignments")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_written_keys_section_dispatches_every_key_as_before() {
+        let sections = [
+            None,
+            Some(
+                "leader: Ctrl-x\nwindow: Ctrl-a\nrebind:\n  Space g: Leader G\nbind:\n  normal:\n    J: null\n    F6: [select-all, yank]\n    Leader q: { command: pipe, argument: sort }\n  insert:\n    Ctrl-s: save\n",
+            ),
+        ];
+        for source in sections {
+            let section = source.map(|source| serde_yaml::from_str(source).unwrap());
+            let written = effective_section(section.as_ref());
+            let text = serde_yaml::to_string(&written).unwrap();
+            assert!(text.contains("\n    w: move-word-forward\n"), "{text}");
+            let written: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+            let empty = serde_yaml::Value::Mapping(Default::default());
+            for fast in [false, true] {
+                let built_in = crate::keymap::keymap_for(fast);
+                let before = configured::compile(section.as_ref().unwrap_or(&empty), &built_in);
+                let after = configured::compile(&written, &built_in);
+                assert_eq!(after.errors, before.errors, "{text}");
+                assert_eq!(dispatch(&after.keymap), dispatch(&before.keymap), "{text}");
+            }
+        }
+    }
 
     /// Collects the backquoted first cell of every table row in `text`.
     fn first_cells(text: &str) -> BTreeSet<String> {
