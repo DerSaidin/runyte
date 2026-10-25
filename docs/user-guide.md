@@ -7436,7 +7436,7 @@ Paste stays literal, and macros record the physical keys you press, as before.
 
 | Limit | Value |
 | --- | --- |
-| Assignments in `keys.bind`, across all files | 1,024 |
+| Assignments in `keys.bind`, across all files | 2,048 |
 | Keys per sequence | 8 |
 | Actions per binding | 16 |
 | Argument length | 4,096 bytes, no control characters |

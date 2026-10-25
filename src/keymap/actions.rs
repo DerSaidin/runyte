@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Room for every built-in binding written out by `:write-config`, which is
 /// several hundred, and as many again of a person's own.
-const MAX_BINDINGS: usize = 1024;
+const MAX_BINDINGS: usize = 2048;
 const MAX_ACTIONS: usize = 16;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 
@@ -329,7 +329,7 @@ pub(super) fn apply(section: Option<&Value>, base: Keymap, errors: &mut Vec<Stri
             .sum::<usize>()
             > MAX_BINDINGS
     {
-        errors.push("bind rejected: at most 4 modes and 1024 assignments are allowed".into());
+        errors.push("bind rejected: at most 4 modes and 2048 assignments are allowed".into());
         return base;
     }
     let mut rules = Vec::new();
@@ -722,6 +722,34 @@ mod tests {
         }
         out.sort();
         out
+    }
+
+    #[test]
+    fn bind_admits_up_to_its_assignment_limit() {
+        // Four letters after F12 per entry: distinct, equally long, and clear
+        // of the count keys.
+        let section = |count: usize| {
+            let mut source = String::from("bind:\n  normal:\n");
+            for n in 0..count {
+                let letters = format!("{n:04}")
+                    .bytes()
+                    .map(|digit| char::from(b'a' + digit - b'0').to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                source.push_str(&format!("    F12 {letters}: save\n"));
+            }
+            serde_yaml::from_str::<serde_yaml::Value>(&source).unwrap()
+        };
+        let built_in = crate::keymap::keymap_for(false);
+        let errors = configured::compile(&section(super::MAX_BINDINGS), &built_in).errors;
+        assert!(errors.is_empty(), "{errors:?}");
+        let errors = configured::compile(&section(super::MAX_BINDINGS + 1), &built_in).errors;
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("2048 assignments")),
+            "{errors:?}"
+        );
     }
 
     #[test]
