@@ -593,9 +593,13 @@ page offers.
 `:write-config [path]` and `:write-config! [path]` are Implemented,
 command-only identities in the Configuration category with no default binding.
 Helix has no counterpart, so both are deliberate Runyte additions. They write
-the saved configuration, built-in themes and language servers included, as one
-YAML document, to the per-user configuration file when no path is given, even
-when `--config` loaded another file. The plain form refuses to replace an
+the saved configuration and language servers to the per-user configuration file
+when no path is given, even when `--config` loaded another file. Custom themes
+and key bindings go into `themes.d` and `keybinds.d` beside it. Unchanged built-in
+bindings are commented examples; explicit assignments remain active. The
+65,536-assignment bound counts active `bind` entries across all files. Export
+validates the prospective files, including retained fragments, both keymap
+variants and directory counts before writing. The plain form refuses to replace an
 existing file or link; the `!` form replaces it, following a symlink to its
 target, the same pairing as `:write` and `:write!`.
 

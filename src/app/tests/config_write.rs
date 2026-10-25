@@ -70,11 +70,14 @@ fn write_config_writes_the_whole_effective_configuration_to_a_given_path() {
         beside("keybinds.d/00-prefixes.yaml").unwrap(),
         "leader: Ctrl-x\n"
     );
-    // Every built-in key is spelled out, under the configured leader, with
-    // the configured binding among them.
+    // Built-in examples follow the configured leader but remain comments;
+    // only explicit assignments are active.
     let normal = beside("keybinds.d/normal.yaml").unwrap();
     assert!(normal.starts_with("bind:\n  normal:\n"), "{normal}");
-    assert!(normal.contains("\n    w: move-word-forward\n"), "{normal}");
+    assert!(
+        normal.contains("\n#     w: move-word-forward\n"),
+        "{normal}"
+    );
     assert!(normal.contains("\n    F5: save\n"), "{normal}");
     assert!(!normal.contains("\n    Space "), "{normal}");
     for mode in ["select", "insert", "replace"] {

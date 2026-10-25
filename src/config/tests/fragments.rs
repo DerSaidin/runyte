@@ -123,8 +123,10 @@ fn files_split_themes_and_keys_out_of_the_configuration_file() {
             "config.yaml",
             "themes.d/Mine.yaml",
             "keybinds.d/00-prefixes.yaml",
-            "keybinds.d/normal.yaml",
             "keybinds.d/insert.yaml",
+            "keybinds.d/normal.yaml",
+            "keybinds.d/replace.yaml",
+            "keybinds.d/select.yaml",
         ]
         .map(Path::new)
     );
@@ -145,7 +147,7 @@ fn files_split_themes_and_keys_out_of_the_configuration_file() {
         files[2].1,
         "leader: Ctrl-x\nbind:\n  visual:\n    F5: save\n"
     );
-    assert_eq!(files[3].1, "bind:\n  normal:\n    F5: save\n");
+    assert!(files[4].1.starts_with("bind:\n  normal:\n    F5: save\n"));
 }
 
 #[test]
@@ -199,4 +201,222 @@ fn explicit_null_theme_roles_survive_writing_inline_and_to_a_theme_file() {
         root.write(&relative.to_string_lossy(), &text);
     }
     assert_eq!(root.load().unwrap().themes["mine"], *theme);
+}
+
+#[test]
+fn default_export_keeps_keys_absent_and_examples_can_be_uncommented() {
+    let root = Root::new();
+    let original = Config::default();
+    crate::settings::write_config(&root.config(), &original, false).unwrap();
+    let loaded = root.load().unwrap();
+    assert!(
+        loaded.keys.is_none(),
+        "comment-only files must not activate key compilation"
+    );
+    let normal = fs::read_to_string(root.0.join("keybinds.d/normal.yaml")).unwrap();
+    assert!(normal.contains("#     w: move-word-forward\n"));
+    let uncommented = normal
+        .lines()
+        .skip(1)
+        .map(|line| line.strip_prefix("# ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let keys: Value = serde_yaml::from_str(&uncommented).unwrap();
+    for fast in [false, true] {
+        let compiled = crate::keymap::configured::compile(&keys, &crate::keymap::keymap_for(fast));
+        assert!(compiled.errors.is_empty(), "{:?}", compiled.errors);
+    }
+    assert_eq!(
+        loaded.to_files(Path::new("config.yaml")).unwrap(),
+        original.to_files(Path::new("config.yaml")).unwrap()
+    );
+}
+
+#[test]
+fn a_large_custom_keymap_exports_without_adding_active_defaults() {
+    let root = Root::new();
+    let mut source = String::from("keys:\n  bind:\n    normal:\n");
+    for n in 0..1400 {
+        let letters = format!("{n:04}")
+            .bytes()
+            .map(|digit| char::from(b'a' + digit - b'0').to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        source.push_str(&format!("      F12 {letters}: save\n"));
+    }
+    let config: Config = serde_yaml::from_str(&source).unwrap();
+    crate::settings::write_config(&root.config(), &config, false).unwrap();
+    let loaded = root.load().unwrap();
+    assert_eq!(loaded.keys, config.keys);
+    assert_eq!(
+        loaded.keys.as_ref().unwrap()["bind"]["normal"]
+            .as_mapping()
+            .unwrap()
+            .len(),
+        1400
+    );
+    for fast in [false, true] {
+        let compiled = crate::keymap::configured::compile(
+            loaded.keys.as_ref().unwrap(),
+            &crate::keymap::keymap_for(fast),
+        );
+        assert!(compiled.errors.is_empty(), "{:?}", compiled.errors);
+    }
+    crate::settings::write_config(&root.config(), &loaded, true).unwrap();
+    assert_eq!(root.load().unwrap().keys, config.keys);
+}
+
+#[test]
+fn invalid_keymaps_are_refused_before_any_generated_file_is_written() {
+    for source in [
+        "keys: {bind: {normal: {F5: no-such-action}}}",
+        "keys: {bind: {normal: {F5: save, 'F5 a': yank}}}",
+        "keys: {bind: {normal: {Tab: save}}}",
+    ] {
+        let root = Root::new();
+        root.write("config.yaml", "# original config\n");
+        root.write("keybinds.d/normal.yaml", "# original keys\n");
+        let config: Config = serde_yaml::from_str(source).unwrap();
+        let error = crate::settings::write_config(&root.config(), &config, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("keys with editor.fast_pane_keys="),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(root.config()).unwrap(),
+            "# original config\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.0.join("keybinds.d/normal.yaml")).unwrap(),
+            "# original keys\n"
+        );
+        assert!(!root.0.join("keybinds.d/insert.yaml").exists());
+        assert!(!root.0.join("themes.d").exists());
+    }
+}
+
+#[test]
+fn retained_fragments_participate_in_validation_and_filename_order() {
+    let root = Root::new();
+    root.write(
+        "keybinds.d/zz-custom.yaml",
+        "bind: {normal: {F5: no-such-action}}\n",
+    );
+    let config: Config = serde_yaml::from_str("keys: {bind: {normal: {F5: save}}}").unwrap();
+    assert!(crate::settings::write_config(&root.config(), &config, false).is_err());
+    assert!(!root.config().exists());
+    assert!(!root.0.join("keybinds.d/normal.yaml").exists());
+    // The retained later file wins over the generated normal.yaml, as on load.
+    root.write("keybinds.d/zz-custom.yaml", "bind: {normal: {F5: yank}}\n");
+    crate::settings::write_config(&root.config(), &config, false).unwrap();
+    assert_eq!(
+        root.load().unwrap().keys.unwrap()["bind"]["normal"]["F5"],
+        "yank"
+    );
+    // A malformed file that is being replaced must not poison the preview.
+    root.write("keybinds.d/normal.yaml", "invalid: [\n");
+    crate::settings::write_config(&root.config(), &config, true).unwrap();
+}
+
+#[test]
+fn theme_and_key_directory_limits_are_checked_before_writing() {
+    let root = Root::new();
+    let mut config = Config::default();
+    for n in 0..257 {
+        config
+            .themes
+            .insert(format!("custom-{n:03}"), ThemeDefinition::default());
+    }
+    let error = crate::settings::write_config(&root.config(), &config, false).unwrap_err();
+    assert!(
+        error.to_string().contains("more than 256 .yaml files"),
+        "{error}"
+    );
+    assert_eq!(fs::read_dir(&root.0).unwrap().count(), 0);
+    config.themes.remove("custom-256");
+    // An existing file consumes a slot even though it is not being replaced.
+    root.write("themes.d/retained.yaml", "accent: '#123456'\n");
+    assert!(crate::settings::write_config(&root.config(), &config, true).is_err());
+    assert!(!root.config().exists());
+    assert_eq!(fs::read_dir(root.0.join("themes.d")).unwrap().count(), 1);
+    config.themes.remove("custom-255");
+    crate::settings::write_config(&root.config(), &config, true).unwrap();
+    assert!(root.load().is_ok());
+    // Replacing files does not consume extra slots.
+    crate::settings::write_config(&root.config(), &config, true).unwrap();
+
+    let root = Root::new();
+    for n in 0..253 {
+        root.write(&format!("keybinds.d/extra-{n:03}.yaml"), "# retained\n");
+    }
+    let error =
+        crate::settings::write_config(&root.config(), &Config::default(), true).unwrap_err();
+    assert!(
+        error.to_string().contains("more than 256 .yaml files"),
+        "{error}"
+    );
+    assert!(!root.config().exists());
+    assert_eq!(
+        fs::read_dir(root.0.join("keybinds.d")).unwrap().count(),
+        253
+    );
+}
+
+#[test]
+fn empty_mode_maps_leave_a_comment_only_template_and_explicit_defaults_stay_active() {
+    let root = Root::new();
+    let config: Config = serde_yaml::from_str("keys: {bind: {normal: {}, insert: {}}}").unwrap();
+    crate::settings::write_config(&root.config(), &config, false).unwrap();
+    assert!(root.load().unwrap().keys.is_none());
+    let config: Config = serde_yaml::from_str(
+        "keys: {bind: {normal: {w: move-word-forward, J: null, F5: [select-all, yank]}}}",
+    )
+    .unwrap();
+    crate::settings::write_config(&root.config(), &config, true).unwrap();
+    assert_eq!(root.load().unwrap().keys, config.keys);
+    let normal = fs::read_to_string(root.0.join("keybinds.d/normal.yaml")).unwrap();
+    assert!(!normal.contains("#     w:"));
+    assert!(!normal.contains("#     J:"));
+    assert!(normal.contains("\n    w: move-word-forward\n"));
+    let edited = normal.replace("#     h: move-left", "    h: move-right");
+    assert_ne!(edited, normal, "the example must exist and be editable");
+    root.write("keybinds.d/normal.yaml", &edited);
+    let keys = root.load().unwrap().keys.unwrap();
+    assert_eq!(keys["bind"]["normal"]["h"], "move-right");
+    assert!(
+        crate::keymap::configured::compile(&keys, &crate::keymap::keymap_for(false))
+            .errors
+            .is_empty()
+    );
+}
+
+#[test]
+fn over_limit_assignments_refuse_forced_export_without_touching_files() {
+    let root = Root::new();
+    root.write("config.yaml", "# keep main\n");
+    root.write("keybinds.d/normal.yaml", "# keep keys\n");
+    let mut source = String::from("keys:\n  bind:\n    normal:\n");
+    for n in 0..=crate::keymap::actions::MAX_BINDINGS {
+        let letters = format!("{n:05}")
+            .bytes()
+            .map(|digit| char::from(b'a' + digit - b'0').to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        source.push_str(&format!("      F12 {letters}: save\n"));
+    }
+    let mut config: Config = serde_yaml::from_str(&source).unwrap();
+    config
+        .themes
+        .insert("mine".into(), ThemeDefinition::default());
+    let error = crate::settings::write_config(&root.config(), &config, true).unwrap_err();
+    assert!(error.to_string().contains("65536 assignments"), "{error}");
+    assert_eq!(fs::read_to_string(root.config()).unwrap(), "# keep main\n");
+    assert_eq!(
+        fs::read_to_string(root.0.join("keybinds.d/normal.yaml")).unwrap(),
+        "# keep keys\n"
+    );
+    assert!(!root.0.join("themes.d").exists());
+    assert!(!root.0.join("keybinds.d/insert.yaml").exists());
 }
