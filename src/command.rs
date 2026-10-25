@@ -133,6 +133,7 @@ pub enum ColonCommand {
     ForceQuit,
     QuitAll,
     ForceQuitAll,
+    TerminateQuitAll,
     QuitHere,
     ForceQuitHere,
     Reload,
@@ -314,6 +315,7 @@ impl ColonCommand {
         Self::ForceQuit,
         Self::QuitAll,
         Self::ForceQuitAll,
+        Self::TerminateQuitAll,
         Self::QuitHere,
         Self::ForceQuitHere,
         Self::Reload,
@@ -394,6 +396,7 @@ impl ColonCommand {
             | Self::ForceQuit
             | Self::QuitAll
             | Self::ForceQuitAll
+            | Self::TerminateQuitAll
             | Self::QuitHere
             | Self::ForceQuitHere => CommandCategory::Application,
             Self::ConfigReload
@@ -2617,6 +2620,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         NoArguments
     ),
     spec!(
+        ColonId(Colon::TerminateQuitAll),
+        "quit-all!!",
+        ["qa!!"],
+        "quit-all!!",
+        "Discard unsaved buffers, terminate this workspace's terminals and quit",
+        NoArguments
+    ),
+    spec!(
         ColonId(Colon::QuitHere),
         "quit-here",
         ["qh"],
@@ -3161,6 +3172,7 @@ fn valid_colon_parameters(command: ColonCommand, parameters: &InvocationParamete
             | Colon::ForceQuit
             | Colon::QuitAll
             | Colon::ForceQuitAll
+            | Colon::TerminateQuitAll
             | Colon::QuitHere
             | Colon::ForceQuitHere
             | Colon::Reload
@@ -3587,6 +3599,7 @@ fn invocation_from_parts(
                 | ColonCommand::ForceQuit
                 | ColonCommand::QuitAll
                 | ColonCommand::ForceQuitAll
+                | ColonCommand::TerminateQuitAll
                 | ColonCommand::QuitHere
                 | ColonCommand::ForceQuitHere
                 | ColonCommand::Reload
