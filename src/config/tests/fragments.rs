@@ -96,7 +96,8 @@ fn a_broken_file_is_named_in_the_error_and_a_broken_key_shape_is_left_to_the_key
     let root = Root::new();
     root.write("themes.d/mine.yaml", "accent: [unclosed\n");
     let error = format!("{:#}", root.load().unwrap_err());
-    assert!(error.contains("themes.d/mine.yaml"), "{error}");
+    let broken = root.0.join("themes.d").join("mine.yaml");
+    assert!(error.contains(&broken.display().to_string()), "{error}");
 
     let root = Root::new();
     root.write("keybinds.d/normal.yaml", "- not\n- a mapping\n");
@@ -114,7 +115,7 @@ fn files_split_themes_and_keys_out_of_the_configuration_file() {
     let files = config.to_files(Path::new("config.yaml")).unwrap();
     let names = files
         .iter()
-        .map(|(path, _)| path.to_string_lossy().into_owned())
+        .map(|(path, _)| path.as_path())
         .collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -125,6 +126,7 @@ fn files_split_themes_and_keys_out_of_the_configuration_file() {
             "keybinds.d/normal.yaml",
             "keybinds.d/insert.yaml",
         ]
+        .map(Path::new)
     );
     let main = &files[0].1;
     assert!(!main.contains("\nkeys:"), "{main}");
