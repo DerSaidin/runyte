@@ -8,6 +8,7 @@
 | Push to dev or exp | Development checks: Linux formatting, Clippy and ordinary tests; ordinary macOS tests |
 | Nightly | Full CI on dev at 02:17 UTC; Desktop edition on dev at 02:47 UTC |
 | Manual CI or Desktop edition dispatch | Full selected workflow on the selected ref |
+| Manual Development checks dispatch | Slim checks on the selected ref, with development-only check names |
 
 The legacy `feat/windows-support` push still runs full CI. Full checks retain
 Windows acceptance, both 10× lifecycle stress jobs, performance budgets, plugin

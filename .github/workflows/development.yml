@@ -5,6 +5,7 @@ name: Development checks
 on:
   push:
     branches: [dev, exp]
+  workflow_dispatch:
 
 permissions:
   contents: read
