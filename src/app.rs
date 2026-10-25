@@ -13,6 +13,7 @@ use std::{
 
 use anyhow::{Result, bail, ensure};
 use regex::{Regex, RegexBuilder};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 
 #[cfg(any(unix, windows))]
@@ -26,7 +27,7 @@ use crate::{
         FileObservationRequest, GeneratedViewIdentity, ObservationApply, Position,
         WorkspaceSearchTarget,
     },
-    clipboard::{CommandClipboard, SystemClipboard},
+    clipboard::SystemClipboard,
     command::{
         ArgumentKind, COMMANDS, ColonCommand, CommandArguments, CommandCategory,
         CommandExecutionContext, CommandId, CommandInvocation, CommandSpec, CommandUnavailable,
@@ -73,7 +74,7 @@ use crate::{
     jumplist::{Jump, JumpList, SelectionSemantics},
     keymap::{BindingScope, BindingTarget, ContextAction, KeySequence, Keymap, keymap_for},
     launch::{LaunchPosition, LaunchTarget},
-    layout::{Axis, Layout, Rect},
+    layout::{Axis, Edge, Layout, Rect},
     lsp::{
         ActionEntry, Capabilities, ChangeSync, Completion, DiagnosticStore, DocumentEdit,
         DocumentSync, Encoding, LspCommand, LspEvent, LspHandle, LspRange, RequestKind, Response,
@@ -123,6 +124,19 @@ struct ReplaceStep {
     before: Selection,
     after: Selection,
     inverse: Transaction,
+}
+
+/// The Insert session `a` opened, with the carets as its last edit left them.
+///
+/// Escape steps back onto the last appended character only while the carets
+/// are still exactly there: a motion, a click, or a pane switch in Insert mode
+/// ends the record, so the caret then stays where it was put, as after `i`.
+#[derive(Clone, Debug)]
+struct AppendInsert {
+    pane: usize,
+    buffer: usize,
+    revision: u64,
+    carets: Selection,
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +292,7 @@ mod lsp_trust_workflows;
 mod mouse_autoscroll;
 mod movement;
 mod navigation_workflows;
+mod pane_drag;
 use navigation_workflows::DestinationScope;
 mod diff_work;
 mod editor_mode;
@@ -481,6 +496,8 @@ struct MarkdownOrigin {
 #[derive(Clone, Debug)]
 pub struct Pane {
     pub buffer: usize,
+    /// Show the PDF page projection instead of its native preview in this pane.
+    pdf_page_list: Option<usize>,
     /// Buffers previously displayed by this pane, oldest to newest.
     ///
     /// Buffer fallback is view-local: closing a shared buffer can reveal a
@@ -527,6 +544,10 @@ pub struct Pane {
     /// Wrapped sub-row within `scroll_row`; always zero when wrapping is off.
     pub scroll_wrap: usize,
     pub scroll_col: usize,
+    /// A successful local line-structure edit requests one layout-time reset.
+    horizontal_reset: Option<(usize, u64)>,
+    prepared_soft_wrap: Option<bool>,
+    horizontal_check: Option<HorizontalScrollCheck>,
     /// Horizontal scroll within a presentation-only row prefix. Buffer text
     /// keeps using `scroll_col`, so this never changes document coordinates.
     pub row_prefix_scroll: usize,
@@ -555,9 +576,14 @@ pub struct Pane {
 }
 
 impl Pane {
+    pub fn shows_pdf_pages(&self) -> bool {
+        self.pdf_page_list == Some(self.buffer)
+    }
+
     fn new(buffer: usize) -> Self {
         Self {
             buffer,
+            pdf_page_list: None,
             buffer_history: Vec::new(),
             saved_view_positions: BTreeMap::new(),
             destination_history: Vec::new(),
@@ -572,6 +598,9 @@ impl Pane {
             scroll_row: 0,
             scroll_wrap: 0,
             scroll_col: 0,
+            horizontal_reset: None,
+            prepared_soft_wrap: None,
+            horizontal_check: None,
             row_prefix_scroll: 0,
             wrap_width: 1,
             preserve_scroll: false,
@@ -584,6 +613,7 @@ impl Pane {
     }
 
     fn retarget(&mut self, buffer: usize) {
+        self.pdf_page_list = None;
         self.markdown_origin = None;
         self.remember_destination(OpenDestination::Buffer(buffer));
         // Even retargeting to the buffer already named leaves the terminal:
@@ -702,7 +732,7 @@ impl ResolvedFold {
     }
 }
 
-fn adjust_scroll(pane: &mut Pane, cursor: Position, height: usize, width: usize, offset: usize) {
+fn adjust_scroll(pane: &mut Pane, cursor: Position, height: usize, offset: usize) {
     if height == 0 {
         return;
     }
@@ -713,14 +743,49 @@ fn adjust_scroll(pane: &mut Pane, cursor: Position, height: usize, width: usize,
             pane.scroll_row = cursor.row + offset + 1 - height;
         }
     }
-    if width == 0 {
+}
+
+/// All inputs to horizontal visibility, including the resulting scroll. Idle
+/// frames reuse this check without touching document text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HorizontalScrollCheck {
+    buffer: usize,
+    binding: u64,
+    revision: u64,
+    cursor: Position,
+    width: usize,
+    tab_width: usize,
+    scroll_col: usize,
+}
+
+fn adjust_horizontal_scroll(
+    pane: &mut Pane,
+    buffer: &Buffer,
+    cursor: Position,
+    width: usize,
+    tab_width: usize,
+) {
+    let mut check = HorizontalScrollCheck {
+        buffer: pane.buffer,
+        binding: pane.binding_generation,
+        revision: buffer.revision(),
+        cursor,
+        width,
+        tab_width,
+        scroll_col: pane.scroll_col,
+    };
+    if pane.horizontal_check == Some(check) {
         return;
     }
-    if cursor.col < pane.scroll_col {
-        pane.scroll_col = cursor.col;
-    } else if cursor.col >= pane.scroll_col + width {
-        pane.scroll_col = cursor.col + 1 - width;
-    }
+    let line_start = buffer.line_to_offset(cursor.row);
+    let line = buffer
+        .text()
+        .rope()
+        .slice(line_start..line_start + buffer.line_len(cursor.row));
+    pane.scroll_col =
+        crate::wrap::horizontal_scroll(line, cursor.col, pane.scroll_col, width, tab_width);
+    check.scroll_col = pane.scroll_col;
+    pane.horizontal_check = Some(check);
 }
 
 fn adjust_scroll_wrapped(
@@ -1811,6 +1876,12 @@ enum PointerDrag {
         last_column: u16,
         last_row: u16,
     },
+    /// An Alt-drag carrying `pane` to wherever it is released.
+    MovePane {
+        pane: usize,
+        expand: bool,
+        drop: Option<pane_drag::PaneDrop>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2532,6 +2603,7 @@ pub(crate) struct HostPorts {
     directory_opener: DirectoryOpener,
     program_opener: ProgramOpener,
     clipboard: Box<dyn SystemClipboard>,
+    edition: crate::cli::Edition,
     trash: std::sync::Arc<dyn TrashBackend>,
     lsp: Option<LspHandle>,
     /// The Git boundary, absent when no `git` executable was found. Every Git
@@ -2544,8 +2616,9 @@ pub(crate) struct HostPorts {
 }
 
 impl HostPorts {
-    fn live() -> Self {
-        let mut ports = Self::isolated(Box::new(CommandClipboard));
+    fn live(environment: crate::cli::Environment) -> Self {
+        let mut ports = Self::isolated(crate::clipboard::live_clipboard(environment.window));
+        ports.edition = environment.edition;
         ports.browser = Box::new(external_open::dispatch_browser);
         ports.directory_opener = Box::new(|path| external_open::dispatch("", path));
         ports.program_opener = Box::new(external_open::dispatch);
@@ -2555,6 +2628,7 @@ impl HostPorts {
     pub(crate) fn isolated(clipboard: Box<dyn SystemClipboard>) -> Self {
         Self {
             clipboard,
+            edition: crate::cli::Edition::Terminal,
             browser: Box::new(|_| bail!("browser opening is unavailable in an isolated editor")),
             directory_opener: Box::new(|_| {
                 bail!("system file manager opening is unavailable in an isolated editor")
@@ -2828,6 +2902,9 @@ pub struct App {
     #[cfg(test)]
     pub(crate) visible_pane_rebuilds: std::cell::Cell<usize>,
     markdown_positions: HashMap<usize, crate::markdown::PositionMap>,
+    /// The source revision each rendered page was last rendered from, so a
+    /// page reached again without an edit in between is not rendered again.
+    markdown_rendered_from: HashMap<usize, u64>,
     /// Stale trees retain translated highlighting but expose no structural
     /// query while their replacement is being parsed.
     stale_syntax: HashMap<usize, StaleSyntax>,
@@ -2872,6 +2949,10 @@ pub struct App {
     pub mode: Mode,
     /// The reversible overwrite trail owned by a live Replace-mode edit.
     replace_session: Option<ReplaceSession>,
+    /// The live Insert session `a` opened. Escape then steps each caret back
+    /// onto the last inserted character, as Helix does, instead of leaving it
+    /// on the character after the insertion.
+    append_insert: Option<AppendInsert>,
     /// A freshly converted empty Markdown item can lose its alignment in one
     /// further Backspace, including when no earlier sibling identifies it.
     list_alignments: Vec<editing::ListAlignment>,
@@ -2890,6 +2971,11 @@ pub struct App {
     /// `PromptKind::ExternalProgram` is collecting one.
     pub external_target: Option<PathBuf>,
     pending_external_opens: Vec<external_opening::Pending>,
+    /// Allow the local graphical frontend to present read-only media buffers.
+    pub native_media: bool,
+    pub(crate) document_previews: HashMap<usize, crate::document_preview::DocumentPreview>,
+    preview_generation: u64,
+    pub media_requests: std::collections::VecDeque<crate::media::ViewRequest>,
     /// Programs previously chosen for binary files and their persisted default.
     pub programs: ProgramCache,
     /// The mode the command palette was opened from.
@@ -3226,6 +3312,11 @@ pub struct App {
     indentation_prompt_hint: Option<String>,
     settings_origin_buffer: Option<usize>,
     pointer_drag: Option<PointerDrag>,
+    /// A consumed Alt-left press owns its trailing reports even after cancellation.
+    pane_pointer_owned: bool,
+    /// The release and drags of a link click remain editor-owned even when
+    /// navigation opens a popup or changes the pane underneath the pointer.
+    pointer_link_pressed: bool,
     pointer_autoscroll: Option<mouse_autoscroll::Autoscroll>,
     /// Code actions backing a code-action picker.
     lsp_actions: Vec<ActionEntry>,
@@ -3302,6 +3393,11 @@ impl App {
         }
     }
 
+    /// The executable edition that owns this editor state.
+    pub fn edition(&self) -> crate::cli::Edition {
+        self.ports.edition
+    }
+
     pub fn new(config: Config, file: Option<PathBuf>) -> Result<Self> {
         Self::new_with_targets(config, file.into_iter().map(LaunchTarget::new).collect())
     }
@@ -3371,7 +3467,7 @@ impl App {
             startup,
             std::env::current_dir()?,
             ProgramCache::load(external_open::cache_root()),
-            HostPorts::live(),
+            HostPorts::live(crate::cli::Environment::default()),
             false,
             false,
         )
@@ -3386,6 +3482,22 @@ impl App {
         launch_directory: impl AsRef<Path>,
         startup: &mut StartupTrace,
     ) -> Result<Self> {
+        Self::new_editor_with_frontend(
+            config,
+            targets,
+            launch_directory,
+            startup,
+            crate::cli::Environment::default(),
+        )
+    }
+
+    pub(crate) fn new_editor_with_frontend(
+        config: Config,
+        targets: Vec<LaunchTarget>,
+        launch_directory: impl AsRef<Path>,
+        startup: &mut StartupTrace,
+        environment: crate::cli::Environment,
+    ) -> Result<Self> {
         Self::new_with_boundaries(
             config,
             targets,
@@ -3393,7 +3505,7 @@ impl App {
             startup,
             std::env::current_dir()?,
             ProgramCache::load(external_open::cache_root()),
-            HostPorts::live(),
+            HostPorts::live(environment),
             true,
             true,
         )
@@ -3406,6 +3518,22 @@ impl App {
         project_root: impl AsRef<Path>,
         startup: &mut StartupTrace,
     ) -> Result<Self> {
+        Self::new_in_project_with_frontend(
+            config,
+            targets,
+            project_root,
+            startup,
+            crate::cli::Environment::default(),
+        )
+    }
+
+    pub(crate) fn new_in_project_with_frontend(
+        config: Config,
+        targets: Vec<LaunchTarget>,
+        project_root: impl AsRef<Path>,
+        startup: &mut StartupTrace,
+        environment: crate::cli::Environment,
+    ) -> Result<Self> {
         Self::new_with_boundaries(
             config,
             targets,
@@ -3413,7 +3541,7 @@ impl App {
             startup,
             std::env::current_dir()?,
             ProgramCache::load(external_open::cache_root()),
-            HostPorts::live(),
+            HostPorts::live(environment),
             true,
             false,
         )
@@ -3564,6 +3692,7 @@ impl App {
             #[cfg(test)]
             visible_pane_rebuilds: std::cell::Cell::new(0),
             markdown_positions: HashMap::new(),
+            markdown_rendered_from: HashMap::new(),
             stale_syntax: HashMap::new(),
             syntax_worker: None,
             defer_syntax,
@@ -3585,6 +3714,7 @@ impl App {
             maximized: None,
             mode: initial_mode,
             replace_session: None,
+            append_insert: None,
             list_alignments: Vec::new(),
             command: String::new(),
             command_cursor: 0,
@@ -3654,6 +3784,10 @@ impl App {
             path_listings: RefCell::default(),
             external_target: None,
             pending_external_opens: Vec::new(),
+            native_media: false,
+            document_previews: HashMap::new(),
+            preview_generation: 0,
+            media_requests: Default::default(),
             programs,
             prompt_origin_mode: Mode::Normal,
             prompt_revision: 0,
@@ -3772,6 +3906,8 @@ impl App {
             indentation_prompt_hint: None,
             settings_origin_buffer: None,
             pointer_drag: None,
+            pane_pointer_owned: false,
+            pointer_link_pressed: false,
             pointer_autoscroll: None,
             lsp_actions: Vec::new(),
             lsp_action_source: None,
@@ -4330,12 +4466,12 @@ fn bounded_outline_component(value: &str, max_bytes: usize, max_cells: usize) ->
     let cell_budget = max_cells.saturating_sub(display_cells(ELLIPSIS));
     let mut bounded = String::new();
     let mut cells = 0usize;
-    for character in value.chars() {
-        let width = UnicodeWidthChar::width(character).unwrap_or(0).max(1);
-        if bounded.len() + character.len_utf8() > byte_budget || cells + width > cell_budget {
+    for cluster in value.graphemes(true) {
+        let width = crate::grapheme::width(cluster).max(1);
+        if bounded.len() + cluster.len() > byte_budget || cells + width > cell_budget {
             break;
         }
-        bounded.push(character);
+        bounded.push_str(cluster);
         cells += width;
     }
     if max_bytes >= ELLIPSIS.len() && max_cells >= display_cells(ELLIPSIS) {
@@ -4346,33 +4482,41 @@ fn bounded_outline_component(value: &str, max_bytes: usize, max_cells: usize) ->
 
 fn display_cells(value: &str) -> usize {
     value
-        .chars()
-        .map(|character| UnicodeWidthChar::width(character).unwrap_or(0).max(1))
+        .graphemes(true)
+        .map(|cluster| crate::grapheme::width(cluster).max(1))
         .sum()
 }
 
-/// Terminal cells before a character boundary, including tab expansion.
+/// Terminal cells before a character boundary, including tab expansion. A
+/// cluster counts once, by its whole width; a zero-width one still takes a
+/// cell so a caret on it has somewhere to be.
 fn visual_column(line: &str, column: usize, tab_width: usize) -> usize {
     let tab_width = tab_width.max(1);
-    line.chars().take(column).fold(0, |cell, character| {
-        cell + if character == '\t' {
-            tab_width - cell % tab_width
-        } else {
-            UnicodeWidthChar::width(character).unwrap_or(0).max(1)
-        }
-    })
+    crate::grapheme::starts(line.chars())
+        .take(column)
+        .fold(0, |cell, (character, width)| {
+            cell + if character == '\t' {
+                tab_width - cell % tab_width
+            } else {
+                width.map_or(0, |width| width.max(1))
+            }
+        })
 }
 
-/// Finds the character that occupies a display column. Callers pad a short
-/// line first, so the target always has a character to land on.
+/// Finds the character that occupies a display column: the start of a
+/// cluster, never a code point inside one. Callers pad a short line first, so
+/// the target always has a character to land on.
 fn column_at_visual_column(line: &str, target: usize, tab_width: usize) -> usize {
     let mut cell = 0;
-    for (column, character) in line.chars().enumerate() {
+    for (column, (character, width)) in crate::grapheme::starts(line.chars()).enumerate() {
+        let Some(width) = width else {
+            continue;
+        };
         let next = cell
             + if character == '\t' {
                 tab_width.max(1) - cell % tab_width.max(1)
             } else {
-                UnicodeWidthChar::width(character).unwrap_or(0).max(1)
+                width.max(1)
             };
         if target < next {
             return column;

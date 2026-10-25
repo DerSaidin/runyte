@@ -2,6 +2,17 @@
 
 use super::*;
 
+fn continue_tutorial(app: &mut App) {
+    assert!(app.tutorial_state().unwrap().exercise_complete);
+    if app.active_terminal().is_some() && app.mode == Mode::Insert {
+        key(app, KeyCode::Char('\\'), Modifiers::CONTROL);
+    }
+    press(app, ':');
+    type_text(app, "tutorial next");
+    key(app, KeyCode::Enter, Modifiers::NONE);
+    assert!(!app.tutorial_state().unwrap().exercise_complete);
+}
+
 #[test]
 fn tutorial_opens_two_native_panes_and_advances_from_editor_state() {
     let mut app = App::new(Config::default(), None).unwrap();
@@ -24,6 +35,21 @@ fn tutorial_opens_two_native_panes_and_advances_from_editor_state() {
     type_text(&mut app, "Hi ");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
 
+    let state = app.tutorial_state().unwrap();
+    assert_eq!(state.lesson, 1);
+    assert!(state.exercise_complete);
+    assert_eq!(app.active_buffer().to_string(), "Hi hello\n");
+    assert!(
+        app.buffers[state.instruction_buffer]
+            .to_string()
+            .contains("EXERCISE COMPLETE")
+    );
+    // Further input and a redraw leave the completed result available to inspect.
+    press(&mut app, 'h');
+    prepare_two_pane_geometry(&mut app);
+    assert_eq!(app.tutorial_state().unwrap().lesson, 1);
+    assert_eq!(app.active_buffer().to_string(), "Hi hello\n");
+    continue_tutorial(&mut app);
     let state = app.tutorial_state().unwrap();
     assert_eq!(state.lesson, 2);
     assert_eq!(app.active_buffer().to_string(), "alpha beta\n");
@@ -111,31 +137,37 @@ fn tutorial_curriculum_advances_through_the_real_input_grammar() {
     press(&mut app, 'i');
     type_text(&mut app, "Hi ");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 2);
 
     press(&mut app, 'g');
     press(&mut app, 'h');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 3);
 
     press(&mut app, 'v');
     press(&mut app, 'e');
     press(&mut app, 'd');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 4);
 
     press(&mut app, 'x');
     press(&mut app, 'x');
     key(&mut app, KeyCode::Char('u'), Modifiers::ALT);
     press(&mut app, 'd');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 5);
 
     press(&mut app, 's');
     type_text(&mut app, "cat");
     key(&mut app, KeyCode::Enter, Modifiers::NONE);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 6);
 
     press(&mut app, 'c');
     type_text(&mut app, "fox");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 7);
 
     press(&mut app, 'C');
@@ -143,11 +175,13 @@ fn tutorial_curriculum_advances_through_the_real_input_grammar() {
     press(&mut app, 'i');
     type_text(&mut app, "> ");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 8);
 
     press(&mut app, ' ');
     press(&mut app, 's');
     press(&mut app, 'c');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 9);
 
     app.prepare_view(FrameGeometry {
@@ -167,24 +201,28 @@ fn tutorial_curriculum_advances_through_the_real_input_grammar() {
 
     key(&mut app, KeyCode::Char('w'), Modifiers::CONTROL);
     press(&mut app, 'h');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 10);
     key(&mut app, KeyCode::Char('w'), Modifiers::CONTROL);
     press(&mut app, 'l');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 11);
 
     press(&mut app, ' ');
     press(&mut app, 'e');
     assert!(app.active_buffer().is_directory());
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 12);
     key(&mut app, KeyCode::Char('o'), Modifiers::ALT);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 13);
 
     press(&mut app, ' ');
     press(&mut app, 't');
     press(&mut app, 'n');
     assert!(app.active_terminal().is_some());
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 14);
-    key(&mut app, KeyCode::Char('\\'), Modifiers::CONTROL);
     press(&mut app, ' ');
     press(&mut app, 't');
     press(&mut app, 't');
@@ -193,14 +231,18 @@ fn tutorial_curriculum_advances_through_the_real_input_grammar() {
     key(&mut app, KeyCode::Down, Modifiers::NONE);
     key(&mut app, KeyCode::Enter, Modifiers::NONE);
     assert!(app.active_terminal().is_none());
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 15);
 
     press(&mut app, 'g');
     press(&mut app, 'e');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 16);
     key(&mut app, KeyCode::Char('o'), Modifiers::CONTROL);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 17);
     key(&mut app, KeyCode::Char('i'), Modifiers::CONTROL);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 18);
 }
 
@@ -301,11 +343,11 @@ fn scratch_lesson_cannot_complete_from_an_unrelated_buffer() {
     press(&mut app, 'i');
     type_text(&mut app, "Hi ");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 2);
 
     app.open_scratch_buffer();
     press(&mut app, '0');
-
     assert_eq!(app.tutorial_state().unwrap().lesson, 2);
 }
 
@@ -338,6 +380,7 @@ fn reopening_explorer_history_lesson_restores_the_alt_o_back_step() {
     app.tutorial.as_mut().unwrap().lesson = 11;
     press(&mut app, ' ');
     press(&mut app, 'e');
+    continue_tutorial(&mut app);
     let state = app.tutorial_state().unwrap().clone();
     app.open_scratch_buffer();
 
@@ -345,6 +388,7 @@ fn reopening_explorer_history_lesson_restores_the_alt_o_back_step() {
     assert_eq!(app.active().buffer, state.explorer_buffer.unwrap());
     key(&mut app, KeyCode::Char('o'), Modifiers::ALT);
 
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 13);
     assert_eq!(app.active().buffer, state.scratch_buffer);
 }
@@ -361,11 +405,13 @@ fn reopening_jump_lessons_reconstructs_backward_and_forward_history() {
     app.open_scratch_buffer();
     app.execute_command("tutorial").unwrap();
     key(&mut app, KeyCode::Char('o'), Modifiers::CONTROL);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 17);
 
     app.open_scratch_buffer();
     app.execute_command("tutorial").unwrap();
     key(&mut app, KeyCode::Char('i'), Modifiers::CONTROL);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 18);
 }
 
@@ -384,6 +430,7 @@ fn both_motion_preference_shows_both_aliases_without_changing_the_keymap() {
     press(&mut app, 'i');
     type_text(&mut app, "Hi ");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    continue_tutorial(&mut app);
     let instruction = app.tutorial_state().unwrap().instruction_buffer;
     let rendered = app.buffers[instruction].to_string();
     assert!(rendered.contains("gh (Helix-like) or 0 (Vim-like)"));
@@ -430,6 +477,7 @@ fn file_end_lesson_honors_vim_like_and_both_motion_preferences() {
         for (code, modifiers) in key_sequence {
             key(&mut app, code, modifiers);
         }
+        continue_tutorial(&mut app);
         assert_eq!(app.tutorial_state().unwrap().lesson, 16);
     }
 }
@@ -484,6 +532,7 @@ fn tutorial_reset_returns_to_the_first_lesson_and_asks_about_motions_again() {
     press(&mut app, 'i');
     type_text(&mut app, "Hi ");
     key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 2);
 
     app.execute_command("tutorial reset").unwrap();
@@ -530,15 +579,67 @@ fn editor_mode_skips_the_terminal_lessons_and_ends_on_the_modes() {
     app.tutorial.as_mut().unwrap().lesson = 11;
     press(&mut app, ' ');
     press(&mut app, 'e');
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 12);
 
     key(&mut app, KeyCode::Char('o'), Modifiers::ALT);
 
     // Lessons 13 and 14 start and close a terminal, which editor mode has not.
+    continue_tutorial(&mut app);
     assert_eq!(app.tutorial_state().unwrap().lesson, 15);
     let mut last = app.tutorial_state().unwrap().clone();
     last.lesson = crate::tutorial::LAST_LESSON;
     let text = crate::tutorial::render(&last, false);
     assert!(text.contains("This tutorial runs in editor mode"), "{text}");
     assert!(!text.contains(":detach now"), "{text}");
+}
+
+#[test]
+fn tutorial_next_refuses_absent_and_unfinished_exercises_and_reset_clears_completion() {
+    let mut app = App::new(Config::default(), None).unwrap();
+    assert!(matches!(
+        app.execute_command("tutorial next").unwrap(),
+        CommandOutcome::UserError(_)
+    ));
+    assert!(app.tutorial.is_none());
+    app.execute_command("tutorial").unwrap();
+    key(&mut app, KeyCode::Enter, Modifiers::NONE);
+    assert!(matches!(
+        app.execute_command("tutorial next").unwrap(),
+        CommandOutcome::UserError(_)
+    ));
+    assert_eq!(app.tutorial_state().unwrap().lesson, 1);
+    assert_eq!(app.active_buffer().to_string(), "hello\n");
+    press(&mut app, 'i');
+    type_text(&mut app, "Hi ");
+    key(&mut app, KeyCode::Escape, Modifiers::NONE);
+    assert!(app.tutorial_state().unwrap().exercise_complete);
+    app.execute_command("tutorial reset").unwrap();
+    assert!(!app.tutorial_state().unwrap().exercise_complete);
+    assert!(matches!(
+        app.execute_command("tutorial next").unwrap(),
+        CommandOutcome::UserError(_)
+    ));
+}
+
+#[test]
+fn resuming_a_completed_jump_lesson_keeps_its_result_until_continuation() {
+    let mut app = App::new(Config::default(), None).unwrap();
+    app.execute_command("tutorial").unwrap();
+    key(&mut app, KeyCode::Enter, Modifiers::NONE);
+    app.tutorial.as_mut().unwrap().lesson = 16;
+    app.reset_tutorial_scratch("first\nsecond\nthird\n", 0, true);
+    app.prepare_tutorial_jump_history(16);
+    key(&mut app, KeyCode::Char('o'), Modifiers::CONTROL);
+    assert!(app.tutorial_state().unwrap().exercise_complete);
+    assert_eq!(app.active().head(), 0);
+    app.open_scratch_buffer();
+    app.execute_command("tutorial").unwrap();
+    assert_eq!(app.active().head(), 0);
+    assert!(app.tutorial_state().unwrap().exercise_complete);
+    assert_eq!(app.tutorial_state().unwrap().lesson, 16);
+    continue_tutorial(&mut app);
+    key(&mut app, KeyCode::Char('i'), Modifiers::CONTROL);
+    assert!(app.tutorial_state().unwrap().exercise_complete);
+    assert_eq!(app.tutorial_state().unwrap().lesson, 17);
 }

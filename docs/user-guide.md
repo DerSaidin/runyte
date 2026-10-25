@@ -42,7 +42,9 @@ reading from top to bottom.
   indentation, and pane-local code folding
 - Word completion from every open buffer, including the explorer, with no
   language server and no trigger key required
-- Unicode-aware buffer positions and terminal widths
+- Unicode-aware buffer positions and terminal widths: an emoji such as `🤷‍♀️`
+  or `👍🏽`, or a letter with its accents, is one character to the caret,
+  selections, deletion, wrapping and the integrated terminal
 
 **Languages**
 
@@ -125,140 +127,32 @@ Helix and which do not.
 
 ## Install and run
 
-Runyte runs on Linux, macOS, and Windows 11. [Windows support](#windows-support)
-lists what is missing or different there.
+Runyte has terminal and desktop editions with the same editor, configuration,
+plugins and persistent sessions. The desktop edition adds the window and media
+viewing, and also runs in a terminal. Both distributions install as `runyte`;
+`--window` requires the desktop edition. Clients and hosts in a persistent
+session must use the same Runyte version.
 
-| Method | Platforms | Section |
-| --- | --- | --- |
-| Install script | x86-64 and ARM64 Linux and macOS | [Install and update with curl](#install-and-update-with-curl) |
-| Release archive | x86-64 and ARM64 Linux and macOS; x86-64 Windows | [Manual download and source installation](#manual-download-and-source-installation), [Windows support](#windows-support) |
-| `cargo install` | Anywhere Rust 1.88 and a C compiler are available | [Manual download and source installation](#manual-download-and-source-installation) |
-| From a clone | Anywhere Rust 1.88 and a C compiler are available | [Building from a clone](#building-from-a-clone) |
+Start with the [README quick start](../README.md#installation), or use the
+separate [installation guide](../INSTALLATION.md) for edition selection,
+dependencies, platform-specific steps, shell setup and updates.
 
 ### Install and update with curl
 
-On x86-64 or ARM64 Linux and macOS:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/runyte/runyte/main/install.sh | sh
-```
-
-Run the same command again to update.
-
-**What the script does:**
-
-1. Resolves the latest GitHub Release once.
-2. Downloads that version's archive and `SHA256SUMS` over HTTPS.
-3. Checks the archive's SHA-256.
-4. Stages the executable and replaces `~/.local/bin/runyte`.
-
-- A failed download, checksum, or extraction leaves an existing installation
-  intact.
-- The checksums establish integrity against the release manifest. They are not
-  independent signatures.
-- The [installer source](../install.sh) is maintained in this repository and
-  served from `main`.
-
-**Requirements:**
-
-- No sudo.
-- `curl`, `tar` with xz support, either `sha256sum` or `shasum`, and standard
-  Unix utilities. Some Linux distributions package xz support separately as
-  `xz-utils` or `xz`.
-- Linux needs glibc 2.35 or newer. Alpine/musl and other operating systems or
-  architectures are rejected.
-- macOS binaries are unsigned and unnotarized. The script does not change
-  Gatekeeper settings.
-
-**Read the script before running it:**
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/runyte/runyte/main/install.sh -o install.sh
-less install.sh
-sh install.sh
-```
-
-**Pin a version or choose a directory.** The script accepts a release version
-(with or without `v`) and an absolute install directory:
-
-```sh
-sh install.sh --version 0.3.0 --install-dir "$HOME/.local/bin"
-```
-
-- Omit `--version` to install or update to the latest release.
-- Keep the same `--install-dir` when updating a custom installation.
-- A pinned version can reinstall or downgrade to any release with matching
-  archives and checksums.
-- The script refuses a symlink or directory at the destination `runyte` path.
-
-**Add the directory to `PATH`** if it is not already there. For the default
-location in a POSIX shell:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-**After installing:**
-
-- Check `command -v runyte` and `runyte --version`, especially if another copy
-  was installed through Cargo or manually. The installer only updates the copy
-  in its chosen directory.
-- Running editors and persistent sessions keep using the old executable until
-  restarted. Save your work before restarting them.
-- The script installs the executable only. It does not change configuration or
-  shell startup files.
-- To uninstall, remove `~/.local/bin/runyte` (or the file in your custom
-  directory).
+The [install script instructions](../INSTALLATION.md#install-script-linux-and-macos)
+cover the terminal edition, checksum verification, version selection and custom
+install directories. The script preserves existing desktop installations.
 
 ### Manual download and source installation
 
-**Release archives.** Prebuilt archives for x86-64 and ARM64 Linux and macOS
-are on the [GitHub Releases page](https://github.com/runyte/runyte/releases).
-
-1. Download the archive for your machine and `SHA256SUMS`.
-2. Compare the archive's checksum with its entry in `SHA256SUMS`: use
-   `sha256sum` on Linux or `shasum -a 256` on macOS.
-3. Extract it. The versioned top-level directory holds the editor, the
-   configuration example, and complete licence material.
-
-The macOS executables are unsigned and not notarized.
-
-**From crates.io.** You need Rust 1.88 or newer and a C compiler; the bundled
-tree-sitter grammars are built from C source during the install.
-
-```sh
-cargo install runyte --locked
-runyte README.md
-```
-
-This installs the `runyte` editor executable. Keep `--locked`: without it,
-Cargo ignores the dependency versions this release was tested with and
-re-resolves to the newest compatible ones. That can pull in a crate needing a
-newer toolchain than Runyte does, and the install then fails naming a
-transitive dependency you have never heard of.
+See [release archives](../INSTALLATION.md#release-archives) for terminal downloads,
+[Cargo installation](../INSTALLATION.md#install-with-cargo) for crates.io, and
+[desktop installation](../INSTALLATION.md#desktop-edition) for the window edition.
 
 ### Building from a clone
 
-```sh
-./build.sh --release
-./target/release/runyte README.md
-```
-
-`build.sh` wraps `cargo build --bins` and forwards any extra arguments.
-
-Install from the clone with Cargo:
-
-```sh
-cargo install --path .
-```
-
-During development:
-
-```sh
-./build.sh
-cargo run -- src/main.rs
-cargo test
-```
+See [building from source](../INSTALLATION.md#build-from-source) for prerequisites,
+package names, build commands and installation of the resulting executable.
 
 ### Windows support
 
@@ -266,25 +160,8 @@ Runyte runs natively on x86-64 Windows 11 24H2 or later, inside Windows
 Terminal. The rest of this guide applies to Windows too; this section lists
 what is missing, what is limited, and what works differently.
 
-**Release ZIP.** Releases from 0.3.2 onward include an x86-64 Windows ZIP with
-`runyte.exe`, the configuration example, and licence material.
-
-- Its hash is in `SHA256SUMS`. Compare
-  `Get-FileHash -Algorithm SHA256 <archive.zip>` with that entry before
-  extracting.
-- Executables are unsigned.
-- The ZIP does not bundle the x64 Microsoft Visual C++ runtime
-  (`VCRUNTIME140.dll`). Install Microsoft's x64 Visual C++ Redistributable if
-  it is absent.
-
-**Building from source** needs Rust 1.88 or newer and Visual Studio Build Tools
-with the C++ toolchain and Windows SDK. The bundled grammars require the C
-compiler.
-
-```powershell
-cargo build --release --locked
-.\target\release\runyte.exe --ide README.md
-```
+See [Windows installation](../INSTALLATION.md#windows) for release ZIPs,
+checksums, the Visual C++ runtime and source-build prerequisites.
 
 #### Not available on Windows
 
@@ -464,6 +341,9 @@ Special buffers:
 - are retained while clean, up to the eight most recently active. Activating a
   ninth retires the least recent one once it is detached;
 - stay available while dirty, until saved or discarded.
+
+A rendered Markdown page is the exception: it is neither counted nor retired
+while its document is open, and it closes with that document.
 
 A pathless scratch buffer is ordinary text, not a special buffer.
 
@@ -686,7 +566,10 @@ its first row and scrolls like any read-only buffer.
 #### The tutorial
 
 `:tutorial` opens two ordinary panes: read-only instructions and disposable
-scratch text.
+scratch text. Complete each exercise by performing the described actions.
+The instructions announce success while the result stays visible. When ready,
+type `:tutorial next` and press Enter; unfinished exercises cannot be skipped.
+In Terminal Insert mode, press `Ctrl-\` before entering the command.
 
 - **First choice:** show Vim-like motion spellings, Helix-like ones, or both.
   This changes only the spellings in the tutorial, never Runyte's behavior or
@@ -703,6 +586,7 @@ scratch text.
 | Command | Effect |
 | --- | --- |
 | `:tutorial` | Resume the live lesson |
+| `:tutorial next` | Continue after completing the current exercise |
 | `:tutorial reset` | Start over |
 | `:tutorial sessions` | Open the persistent-session lesson directly |
 
@@ -720,10 +604,13 @@ Mouse support needs a terminal with mouse reporting and `editor.mouse: true`
 | --- | --- |
 | Click | Focus a pane and place the caret |
 | Shift-click | Extend the selection |
+| Ctrl-left-click in the native window (Cmd-left-click on macOS) | Follow the file path or web link under the pointer, like `gf`, including live terminal output |
 | Drag | Select, entering Select mode |
 | Drag past the top or bottom row | Scroll and keep extending |
 | Wheel | Scroll the pane under the pointer |
 | Drag a shared border | Resize the split |
+| Alt-left-drag inside a pane | Rearrange panes using the [pane drop outline](#pane-keys) |
+| Shift-Alt-left-drag inside a pane | Extend the pane into neighbouring panes |
 | Right-click a selection | Copy all selections to the system clipboard, like `Space c y` |
 | Double-click a directory tree row | Toggle the directory or open the file, like Enter |
 
@@ -731,10 +618,22 @@ Mouse support needs a terminal with mouse reporting and `editor.mouse: true`
   folds. Move back inside the pane or release the button to stop.
 - **Right-click copy** leaves the selections alone and reports
   `right mouse click (yanked to system clipboard)`.
+  The native window uses the same behavior for document and terminal-review
+  selections; right-drag in PDF and image previews pans instead.
 - **Character rule.** The pointer names the character under it, not the gap
   before it, so a drag covers the characters it started and ended on, in
   either direction. Pressing past a line's end places the caret on its last
   character, or past it in Insert mode, as keyboard motion does.
+- **Native link clicks.** Ctrl-left-click (Cmd-left-click on macOS) uses the
+  clicked character, ignoring existing selections. It follows the same paths,
+  Markdown labels and heading links, and web URLs as `gf` in document views and
+  terminal panes. Live terminals stay in input mode; reviewed terminals use
+  their frozen text. Supported wrapped terminal URLs resolve from any of their
+  rows. This gesture, including its drag and release, is never sent to the child.
+  Extra modifiers retain their ordinary mouse behavior; prompts and overlays
+  keep ownership of input. The interaction line names the gesture and its
+  result, such as
+  `Ctrl-left-click (opened https://example.com in the default browser)`.
 - **Terminal panes.** A click focuses a live terminal in Insert mode; a
   reviewed terminal stays in Normal/review until a terminal insert key returns
   to the live screen. A left drag in review selects cells and enters Select
@@ -821,7 +720,6 @@ under [Insert and Replace modes](#insert-and-replace-modes).
 | `Ctrl-b` / `Ctrl-f`; `Ctrl-u` / `Ctrl-d` | Page up / down; half-page up / down |
 | `PageUp` / `PageDown` | Page up / down |
 | `gg` / `ge` or `G` | Start / end of file |
-| `gp` / `gP` | Next / previous paragraph |
 | `gf` | Open the selected path exactly, or infer the complete path under a bare cursor; inferred paths at the end of a sentence ignore trailing punctuation if the literal name does not exist. On a Markdown link to `#heading` or `file.md#heading`, land on that heading |
 | `gw` | Dim the view, label nearby words with one key and farther words with two, then type a label to jump |
 | `gt` / `gc` / `gb`; `H` / `M` / `L` | Move to the top / center / bottom of the visible window |
@@ -855,6 +753,8 @@ under [Insert and Replace modes](#insert-and-replace-modes).
 | `Ctrl-o` / `Ctrl-i`; `Alt-o` / `Alt-i` | Jump backward / forward through every navigation point; jump backward / forward to another buffer |
 | `Tab` | Open contextual actions for the selection or row under the caret |
 | `Ctrl-s` | Save |
+| `Ctrl-C` (Ctrl-Shift-c) | Copy the selection to the system clipboard |
+| `Cmd-c` (macOS) | Copy the selection to the system clipboard |
 | `Ctrl-v` / `Alt-v` | Paste the system clipboard, storing an image in the workspace and writing a numbered Markdown link to it; also bound in Insert mode |
 | `:` | Open the command palette |
 | `\|` | Shell pipe key (reserved; use `:pipe <shell-command>`) |
@@ -918,7 +818,9 @@ text they cross, as in Helix:
 - Each press starts a fresh selection, which never contains a line break.
 - Anything that reads a selection reads this one: `p` replaces it, `s` and `/`
   search inside it, and `*` searches for it.
-- Other motions still move a caret, and Select mode still extends.
+- Other motions still move a caret, and Select mode still extends. Its word
+  motions extend to where these selections end, so `v w` takes `one ` from
+  `one two`, as in Helix, whether or not `editor.selecting_motions` is on.
 
 Set `editor.selecting_motions: false` to make these motions move a caret too.
 A word is then selected with `v` first: `v e d` deletes to the end of the word.
@@ -1021,12 +923,19 @@ travels with the working copy, not the commit.
 | Insert | `i`, `a`, `I`, `A`, `o`, `O`, `c` | Adds text at every caret |
 | Replace | `R` | Overwrites the character ahead of each caret |
 
+Escape returns to Normal mode. After `a` the caret rests on the last character
+typed, and after `i`, `I`, or `c` on the character the text went in front of,
+as in Helix. After `A`, `o`, or `O` it rests on the last character typed, where
+Helix rests on the line terminator a Runyte caret never occupies. Moving the
+caret in Insert mode, by key or pointer, leaves it where it was put.
+
 **Replace mode details:**
 
 - Entering collapses every selection to its active head.
 - A caret at line end appends instead of overwriting.
 - A newline inserts a line break rather than consuming the existing one.
-- Unicode characters are replaced one for one, and CRLF stays one line ending.
+- Characters, including whole emoji sequences, are replaced one for one, and
+  CRLF stays one line ending.
 - The whole Replace session is one undo checkpoint.
 - Lowercase `r` is the single-character Normal-mode command and never enters
   Replace mode.
@@ -1047,6 +956,8 @@ The keys shared by Insert and Replace modes:
 | `Ctrl-x` | Ask the language server for completions |
 | `Ctrl-c` | Comment or uncomment the lines holding the carets |
 | `Ctrl-s` | Save |
+| `Ctrl-C` (Ctrl-Shift-c) | Copy the selection to the system clipboard |
+| `Cmd-c` (macOS) | Copy the selection to the system clipboard |
 | `Ctrl-v` / `Alt-v` | Paste the system clipboard, storing an image in the workspace and writing a numbered Markdown link to it |
 | `Ctrl-w` then a pane suffix | Move to another pane without first leaving Insert or Replace mode |
 
@@ -1124,7 +1035,7 @@ mouse positioning and language-server formatting options. See
 | Key | Keeps | Adds |
 | --- | --- | --- |
 | `o` / `O` (Normal) | The row's exact leading spaces and tabs | Nothing: no list marker, no syntax level |
-| Enter (Insert) | The row's exact leading spaces and tabs | At most one level in `editor.indent` style when the syntax indentation query asks for it; a grammar that requires a tab still gets a tab |
+| Enter (Insert) | The row's exact leading spaces and tabs | At most one level in `editor.indent` style when the row opens a block the syntax indentation query recognizes: it ends with an opening bracket in a brace language, a Python header or YAML key ends with `:`, or a `case` label, an element's start tag, or a construct such as `else:` begins on it. An ordinary row inside a block adds nothing. A grammar that requires a tab still gets a tab |
 
 `o` and `O` place the caret after the indentation, and work the same with
 smart newline off.
@@ -1330,6 +1241,16 @@ lines.
 | `Space p j` | Join selected lines with a typed delimiter |
 | `J` | Join selected lines with a space |
 | `Space p t` | Align the columns of the selected table |
+
+After an edit that inserts or removes line breaks—such as Enter, hard wrap,
+reflow, opening a line, multiline paste, or joining lines—the editing pane
+returns to column zero when the caret fits. Otherwise it scrolls right only
+far enough to keep the caret visible, accounting for tabs, wide characters,
+and the space occupied by the gutter. Rejected edits and unchanged wraps keep
+the view. Changing soft wrap through `Space p s` or configuration also resets
+each affected pane; diff panes remain unwrapped. The caret keeps its editing
+position. Exceptionally long runs of invisible characters use a bounded view
+near the caret to keep scrolling responsive.
 
 #### Whitespace markers
 
@@ -1585,6 +1506,8 @@ pairs.
   commands and the syntax [text objects](#text-objects) show them with the
   block cursor on the last included character, as in Select mode. Yank,
   delete, change, and indent act on exactly the highlighted span.
+- **Document outline.** Nested entries are indented two spaces per level,
+  up to 32 spaces. Filtering preserves their indentation and parent breadcrumbs.
 - **Folds are per pane.** Two panes may collapse different regions of one
   shared buffer. Any edit clears both panes' folds.
 - **Folded rows** show an accent-coloured `▸` between the line number and the
@@ -1708,6 +1631,201 @@ under [Directory tree sidebar](#directory-tree-sidebar).
 
 **Opening by command:** `:open <path>` (aliases `:e`, `:edit`) opens a file or
 directory in the active pane; see [Commands](#commands) for path completion.
+
+### Desktop edition
+
+Build the desktop edition with `cargo build -p runyte-desktop`.
+Launch `target/debug/runyte-desktop --window` in a workspace, or add `--editor` to work
+outside one. All existing editor keys and configured keymaps are dispatched by
+the same registry. The interface remains the editor's cell grid, without menus
+or toolbars. Window resizing changes the pane geometry and PTY dimensions.
+In standalone mode the window close button requests `:qa`, preserving
+unsaved-buffer and running-terminal refusal. In `--window --mux` it detaches,
+leaving all editor state and terminal sessions in the host.
+
+If the host cannot keep up and the bounded input queue fills, the window shows
+“Some input was lost. Click to dismiss.” The notice remains until clicked.
+Consecutive queued drags coalesce to their latest position; keys, clicks and
+paste keep their order.
+
+For the Runyte application icon on Wayland, register the desktop entry with
+`python3 contrib/packaging/package.py linux --binary target/debug/runyte-desktop` before
+opening a new window. X11 also receives an icon directly. A macOS `.app`
+packaging helper and the platform limitations are described in the
+[native desktop integration guide](../contrib/packaging/README.md).
+
+PNG, JPEG, GIF, WebP, BMP, and PDF paths open as read-only media projections in
+the destination pane, including from `:open`, the explorer, the directory tree,
+and startup filenames. Other binary types retain the external-program prompt.
+Media never becomes an editable source file or a save target. Ordinary pane,
+buffer, jump, and close commands remain available. Titles identify PDFs with
+`[pdf]` and images with `[image]`. Images initially fit the pane while preserving
+aspect ratio. Zoom, pan, and selection belong to each pane, so split views of
+the same file can differ.
+
+Animated GIF and WebP images play automatically while visible, using their frame
+delays and loop counts. A finite animation stops on its last frame. Selecting a
+region pauses that pane on the displayed frame; `y` / `Ctrl-c` copies from that
+frame. Clearing the selection resumes playback. Split panes have independent
+playback and selection state. Hidden previews and minimized windows do not keep
+an animation timer running; restoring a preview resumes without replaying missed
+frames. There are no separate pause, step, or restart bindings.
+
+Frame delays below 20 ms use 100 ms to prevent continuous redraws. Decoding is
+limited to 1024 frames and 32 MiB of retained raster data per animation, after
+reduction to 2048 pixels per axis. An animation exceeding either limit shows a
+clear error in its pane. For example, two 2048×2048 RGBA frames fill the 32 MiB
+budget. Animated WebP EXIF metadata is limited to 64 KiB. Single-frame files
+remain still images.
+
+PDFs have a read-only **page buffer** with one row per page. Once the displayed
+page is at fit size and has no selection, Escape reveals this buffer at the
+current page. Use normal editor motions,
+counts, or buffer search (`s` or `/`) to choose a row, then Enter displays that
+page. Moving the cursor in the page buffer does not display pages until Enter.
+`42gg` goes to page 42; `gg` and `ge`/`G` go to the first and last pages. Escape
+or `q` from the page buffer opens the source directory with the PDF selected.
+In Select mode, either key first clears the selection and returns to Normal mode.
+
+Images have no page buffer: leaving their preview opens the source directory.
+Escape first dismisses a pending overlay or key sequence. On zoomed-in media,
+the next press returns to fit size in one step, preserving its selection;
+subsequent presses clear the selection and then leave the media surface.
+This fit-then-clear order applies to images and PDFs alike. `Space e` goes directly to
+the source directory from either media type and selects the source file, just
+as it does from a rendered Markdown document. `Space E` still opens the editor's
+working directory.
+
+In a PDF or image preview, `q` performs the same fit, clear-selection, and
+leave-preview action as Escape, in both Normal and Select mode. Overlays
+and pending key sequences retain their own bindings.
+
+| Input in a media pane | Action |
+| --- | --- |
+| `+` / `=` / `-` | Zoom in / out |
+| `z f` / `z 1` | Fit pane / actual raster pixels |
+| `z h`, `z j`, `z k`, `z l` | Pan left, down, up, right |
+| `h` / `l` | Pan horizontally |
+| `j` / `k`, vertical arrows, counts | In Normal mode, pan a zoomed PDF vertically; change pages at fit size. Images always pan. |
+| `Ctrl-f` / `Ctrl-d` / `Ctrl-n` / PageDown | Next PDF page at any zoom |
+| `Ctrl-b` / `Ctrl-u` / `Ctrl-p` / PageUp | Previous PDF page at any zoom |
+| `42gg` / `gg` / `ge` or `G` | Go directly to PDF page 42 / first page / last page |
+| `z z` | Center the media |
+| `v`, then `h/j/k/l` or arrows | Extend a PDF word/line selection or an image-region corner; `v` again stops extending |
+| `%` | Select all page text, or the whole image when there is no text |
+| `y` / `Ctrl-c` | Copy selected PDF text or selected image region to the system clipboard |
+| Escape | Dismiss overlay or pending keys; then fit → clear selection → PDF page buffer → explorer. Images go directly from cleared selection to explorer. |
+| Wheel / Shift-wheel | Pan vertically / horizontally; at fit size, vertical PDF scrolling changes pages |
+| Ctrl-wheel (Cmd-wheel on macOS) | Zoom around the pointer |
+| Middle-drag or right-drag | Pan |
+| Alt-left-drag | Move the pane using the pane drop outline |
+| Shift-Alt-left-drag | Extend the pane into neighbouring panes |
+| Left-drag on PDF text | Select words in reading order |
+| Left-drag on an image | Pan; double-click toggles fit / 2× fit |
+| Shift-left-drag | Select a rectangular image region, including on PDFs |
+
+There is no separate PDF page picker or `g p` binding. The paragraph commands
+`goto-next-paragraph` and `goto-previous-paragraph` remain available for configured
+keys without default bindings; `g p` and `g P` do not move between text paragraphs.
+
+Scanned PDFs without embedded text use rectangular selection; the desktop edition
+does not perform OCR. Copying a region exports the base page/image raster,
+including alpha, without modifying the source file; PDF zoom refinement does
+not increase the resolution of copied regions. PDF text selection uses Hayro glyph geometry and content-stream order.
+If glyphs lack Unicode mappings or usable geometry, extraction independently
+falls back to Poppler's `pdftotext`. If both fail, the page remains viewable and
+region selection stays available. Complex layout reading order is heuristic;
+this is not a full document-layout analysis.
+
+Prompts and key hints remain readable above the media surface. Opening them
+does not expose internal image placeholder rows or enter the PDF page buffer.
+
+PDF support includes Hayro 0.8, run in a disposable helper process of the
+same executable. Each page or refinement request automatically falls back to
+separately installed Poppler tools when Hayro fails or reports unsupported
+content. If both fail, the pane reports both errors. Hayro supports embedded
+fonts and its standard Latin substitutes (including recognized nonstandard
+font names); it does not consult system fonts. Substitution can change glyph
+shapes and spacing. Other unavailable fonts require Poppler. Encrypted PDFs
+with an empty user password can open; entering a PDF password is not supported.
+Rendering runs on one background worker and reports failures inside the pane. Input is
+limited to regular files up to 128 MiB, decoded images to 8192 pixels per axis
+and 64 MiB allocation, and PDFs to 10,000 pages. Images are reduced to at most
+2048 pixels per axis. PDF pages initially render at 1600 pixels on their longest
+axis. When that is insufficient for the current zoom or display pixel density,
+the visible region is rendered again in the background. The base page remains
+visible while sharper text and vector graphics load. Each refinement is bounded
+to 4096 pixels per axis and approximately eight million pixels; unusually large
+or dense displays may still exceed that detail budget. Eight base page/image
+results and eight visible-region refinements are cached separately using
+least-recently-used eviction. The base cache is also bounded to 256 MiB, enough
+for eight animations at their individual limit. GPU images no longer displayed
+by any pane are released. Zooming, panning, resizing, or leaving a pane
+cancels refinements that are no longer needed by any visible pane.
+After a PDF page loads, up to two pages on either side are loaded in the
+background. Requested pages take priority and interrupt speculative rendering.
+First loads and jumps beyond the warmed pages can still show a loading message.
+PDF subprocesses have a 15-second limit per invocation and are killed and reaped
+during cancellation. Hayro additionally has a 1 GiB address-space budget
+(on macOS, above the executable's initial mappings), a 15-second CPU limit,
+and bounded RGBA output. Its normal path uses no raster temporary files.
+Poppler fallback retains its temporary PNG/XHTML files and existing limits.
+
+On Linux/macOS, `runyte --window --mux` creates or attaches to the same
+persistent sessions as `runyte --mux`. Only one interactive frontend attaches
+at a time. `:detach` closes the window and preserves the session; `:quit` from
+the last pane and `:quit-all` stop a clean session and reuse the window for the
+previously visited available running session, closing it when none is available.
+Unsaved edits and live terminal children still refuse a stop. Session navigation
+uses the same `Space Space`, `Space 1`–`Space 9`, `Shift-Left` / `Shift-Right`,
+and `Ctrl-w a` bindings in either frontend.
+
+Media panes survive frontend handoff. A terminal client retains their `[pdf]`
+or `[image]` title and displays `Media viewing needs the Runyte window: use the desktop edition with --window` in the
+body; Escape and `Space e` still reach the source directory. Opening a binary
+while the terminal client is attached uses the external-program prompt. A
+window attachment opens supported media in panes, with decoding and PDF
+rasterization performed by the window process.
+
+The window client needs the desktop edition; either edition can serve the
+persistent host or attach as a terminal client. Every client, host, and
+integrated `runyte --wait` must use the same Runyte version; a private protocol
+mismatch is refused at the handshake. Integrated Claude Code and Codex `Ctrl-g` edits work through
+this persistent host and survive detach and frontend handoff.
+
+The native window supports `ide`, `editor`, and `mux` modes; host and lifecycle
+modes are CLI operations. The desktop window is not available on Windows.
+The window embeds JetBrainsMono Nerd Font in Medium, Medium Italic,
+Bold, and Bold Italic. Set `editor.font_size` in `Space o o` (8–48 logical
+pixels, default 15); the saved size is read when each window opens, including
+reattachment to an existing persistent session. Reopen the window after saving
+the setting. Ctrl-plus (also Ctrl-equals) and Ctrl-minus adjust the current
+window by one pixel without writing the configuration. Text, pointer targeting,
+panes and terminal dimensions scale together. No system font installation is required.
+
+Ctrl-Shift-c copies the editor selection, terminal review selection, or selected
+media to the system clipboard. Ctrl-Shift-v pastes clipboard text as literal input
+into Insert/Replace mode, a prompt, or an integrated terminal, like a terminal
+emulator's paste shortcut. Normal mode retains ordinary modal paste commands
+(`Space c p` or Ctrl-v). Ctrl-c remains terminal child input. Native-feature
+builds use an in-process clipboard owner for `Space c y`, Ctrl-v and the other
+system clipboard commands; external clipboard helpers are not required.
+Window-local font and literal-paste shortcuts are reserved frontend controls,
+listed in contextual help; they do not participate in editor key remapping.
+On macOS, Cmd-c also copies, and Cmd-v also pastes literal
+clipboard text. Ctrl-Shift-c/v remain available. The Command modifier is
+displayed as `Cmd` in macOS help and key hints. Configuration accepts both
+`Cmd-c` and `Super-c` for the same key (and likewise for other Command keys),
+on every platform. Other Command shortcuts are left unchanged.
+Search within PDF page contents is not implemented.
+Image zoom and scanned PDF content remain limited by their
+source resolution. PDF text and vector graphics are rendered at the view
+resolution within the visible-region budget described above. PDF rendering uses
+a bundled Rust helper, with separately installed Poppler as fallback. Source changes
+are checked when another frame is presented; there is no automatic media reload
+watcher. macOS, Wayland, IME composition, and touchpad pinch gestures still need hands-on
+platform verification. Ctrl-wheel zoom is supported; native pinch gestures are
+not exposed by this GPUI release.
 
 ### Opening binary files
 
@@ -1957,8 +2075,11 @@ one.
 - This keeps `Ctrl-o`/`Ctrl-i` and `Alt-o`/`Alt-i` useful without letting
   `Space b b` or the Finder accumulate stale views.
 - A dirty special buffer stays open until saved or discarded.
-- An empty, clean scratch buffer retires as soon as its last pane leaves.
-  Written scratch text is an ordinary buffer.
+- A rendered Markdown page is not counted and stays while its document is
+  open; it closes with the document.
+- An empty, clean scratch buffer retires as soon as its last pane leaves,
+  unless a pane is reading its rendered page. Written scratch text is an
+  ordinary buffer.
 
 ### Directory buffers
 
@@ -2545,7 +2666,7 @@ Runyte's own registers.
 
 Pane commands live under `Space w`, with `Ctrl-w` as the compatibility
 spelling. From Insert and Replace modes, `Ctrl-w` reaches focus movement
-(`h/j/k/l`), `w`, `x`, `n`, `p`, and `a`; Terminal Insert adds `v/s` and
+(`h/j/k/l`), pane moves (`H/J/K/L`), `w`, `x`, `n`, `p`, and `a`; Terminal Insert adds `v/s` and
 `f/z` (see [Terminals](#terminals)).
 
 | Key | Action |
@@ -2553,6 +2674,7 @@ spelling. From Insert and Replace modes, `Ctrl-w` reaches focus movement
 | `Space w v` / `Space w s`, or `Ctrl-w v/s` | Vertical/horizontal splits; from a terminal, the new pane opens the working-directory explorer |
 | `Space w…` or `Ctrl-w…` | Window focus, close, next, and only-window operations |
 | `Space w x` or `Ctrl-w x` | Exchange the active pane's complete content with the previously focused pane, following the content to its new position |
+| `Space w H/J/K/L` or `Ctrl-w H/J/K/L` | Move the active pane to the left/bottom/top/right edge, spanning the full height or width |
 | `Space w =` | Equalize pane widths, then pane heights within each column |
 | `Space w f` / `Space w z`, or `Ctrl-w f` / `Ctrl-w z` | Toggle the full-screen pane / the centred Zen viewport |
 | `Ctrl-h/j/k/l` | Move between panes without a prefix, when `editor.fast_pane_keys` is on |
@@ -2564,6 +2686,31 @@ spelling. From Insert and Replace modes, `Ctrl-w` reaches focus movement
 
 Borders can also be dragged with the mouse. The key-hint popup after
 `Space w` lists every window command.
+
+Hold Alt and drag with the left mouse button inside a pane to rearrange it.
+A thick **pane drop outline** shows where it will land on release. The outer
+two columns or one row of the layout move it to that whole edge; the outer
+quarter of another pane splits that pane to make room; the middle of another
+pane swaps their complete contents. Shared borders resize even with Alt held.
+Alt-left-press inside a terminal pane belongs to Runyte and is not forwarded
+to the child, even when the child requests mouse reporting. Pane moves preserve
+the pane's content and terminal session, and are unavailable while Zen or
+full-screen maximizes a pane.
+
+Hold Shift and Alt when starting a left-drag to **extend** the pane in place.
+Drag outside one of its sides: the outline snaps that side to the far edge
+of the pane under the pointer. Release to apply it, or press Escape to cancel.
+The other sides stay anchored. Neighbours shrink where they can remain one
+rectangle; covered panes, or panes that would be split into separate pieces,
+close as with `:wc`. Adjacent panes grow into any space left by those closures.
+Buffers, unsaved edits, and terminal sessions remain available. If the result
+cannot form a rectangular split layout, there is no outline and release leaves
+the layout unchanged. Shared borders still resize normally.
+
+For example, starting with `AA / BC`, extending C upward gives `AC / BC`;
+extending B right gives `AC / BB`; extending B upward leaves B filling the
+editor. With `AAA / BCD`, extending C upward closes A and grows B and D,
+leaving three full-height columns `BCD`.
 
 **Examples:**
 
@@ -2950,7 +3097,9 @@ titles.
 
 **Mouse.** SGR mouse reports are forwarded inside the pane body when the child
 asks for them. Borders stay Runyte's, and the wheel scrolls review history
-when the child has not asked for the pointer.
+when the child has not asked for the pointer. In the native window,
+Ctrl-left-click (Cmd-left-click on macOS) follows links instead, even while
+the terminal is in input mode and requesting mouse reports.
 
 **Colour queries.** Read-only `OSC 10;?` and `OSC 11;?` queries get the theme's
 default foreground and background, so light- and dark-aware programs pick
@@ -3940,6 +4089,45 @@ brackets, text objects, and structural selection cannot use stale offsets.
 - Language detection, comments, editing, search, saving, and language servers
   do not need a syntax tree.
 
+### Document preview
+
+In the desktop window, `:preview` captures selected text, or the
+whole current buffer when the selection is a bare caret. It includes unsaved
+edits and leaves the source text and selection intact. Multiple nonempty ranges
+are joined in document order with a newline. A selected SVG diagram is rendered
+graphically even inside a Markdown or source document.
+
+Desktop packages include preview in the editor executable, including inside
+local macOS app bundles. The Linux x86-64 and ARM64 desktop release archives require glibc
+2.39 or newer and the native runtime dependencies; the terminal archives and
+curl installer remain separate. See the [desktop packaging guide](../contrib/packaging/README.md).
+For a checkout build, use the [preview instructions](../crates/runyte-preview/README.md).
+Markdown uses proportional GitHub-like typography; static HTML and SVG render
+graphically. JSON is pretty-printed when valid and retains its original text
+with a diagnostic otherwise. YAML retains its comments, structure and ordering.
+Source code uses available syntax highlighting; other text uses monospace.
+
+Generated pages — Markdown, JSON, YAML, source and plain text — take the active
+theme's colours: its background and text, its link and heading colours, and
+its syntax colours for highlighted code. Switching theme or the setting
+repaints an open preview. Set `editor.preview_theme_colors` to `false` to keep
+the original light page. Static HTML and valid SVG keep the appearance they
+were written with; HTML that styles itself through `prefers-color-scheme`
+follows whether the theme is dark or light.
+
+Wheel/trackpad scrolling preserves fractional pixels; Shift-wheel pans horizontally.
+The preview also uses the built-in PDF navigation keys: `j`/`k` and arrows,
+`h`/`l`, page/half-page controls, `gg`/`ge`, and `+`/`-` zoom (`z1` resets).
+Left-drag selects text; `y` or Ctrl-Shift-c copies it. Escape dismisses an overlay
+first, then returns to source; `q` also returns to source. A dismissed preview
+stays closed when switching workspaces or reattaching to its persistent session.
+Invoke `:preview` again to refresh. Links expose their destination without
+navigating. Scripts and network fetching are disabled. Local raster images must
+be beneath the source document's directory. Captures are limited to 128 KiB;
+selecting a smaller section of a larger file is supported. The terminal frontend
+reports that this command needs `--window`. See the preview instructions for
+resource limits, lifecycle and tested static CSS/SVG support.
+
 ### Rendered Markdown
 
 `?` in a Markdown document opens it as a page to read; `?` again returns to
@@ -3985,6 +4173,30 @@ keeps every editing key.
   actually on screen.
 - It is rendered from the buffer, not the file, so it shows unsaved work.
   Rendering the same document again reuses and regenerates its one page.
+  Returning to the page through `Ctrl-o`/`Alt-o`, the buffer list, or the
+  previous destination regenerates it too when the document has changed,
+  keeping the caret on the same text.
+
+**Each pane remembers which you left.** Opening a document by name shows it
+the way that pane last showed it: if you left it on its page, you come back to
+the page; if you left it in the source, you come back to the source.
+
+- This applies to `:open`, `:split`/`:vsplit` with a path, choosing the
+  document by name in the Finder (`Space f`), the directory tree, explorer
+  entries, Git changed-file rows, `gf` on a file, and links to
+  `file.md#heading`, which land on the page's heading. Native launch targets
+  without a position follow this memory too. The page's own
+  `[rendered]` row in the Finder always opens the page.
+- A request for a place to edit still opens the source: a Finder content
+  match, a diagnostic, a definition or reference, a native launch target with
+  a position, and any host or `--wait` open request.
+- The buffer list keeps one row for the document and one for its page, and
+  each row opens exactly that.
+- Panes remember separately, so one can keep the source while another reads
+  the page. A split starts with what the pane it came from remembered.
+- The page lives as long as its document. Closing the document closes its
+  page, and the retention limit for hidden generated buffers never removes
+  it. Closing the page itself means the document opens as source again.
 
 **The scratch buffer** renders too while `editor.scratch_markdown` is on — the
 same option that makes `Space p r` refill it as Markdown. Its page is named
@@ -5049,9 +5261,11 @@ persistent session, even from another working directory or a temporary path.
 - A failed save leaves the edit open.
 - Navigation and splits keep request ownership; unrelated buffers keep
   ordinary quit behavior.
-- Switching sessions keeps the request pending in its host. Explicit detach or
-  loss of the caller cancels it; buffers are kept and no nested TUI takes over
-  the terminal.
+- On Unix, switching sessions and explicit detach keep the request pending in its host,
+  including closing a persistent-session window. Reattaching either frontend
+  resumes the edit. Loss of the calling process cancels it; buffers are kept
+  and no nested TUI takes over the terminal. Outside-shell control-client waits
+  retain their cancellation on disconnect.
 
 **Environment in new terminals.** New persistent terminals add `--wait` to
 inherited `EDITOR` and `VISUAL` values that name bare `runyte` (including a
@@ -5120,502 +5334,6 @@ hosts started in other isolated Runyte environments.
   visibility allows. A responsive endpoint is kept when a PID namespace hides
   its process; one that cannot be observed conclusively is left out without
   being removed.
-`Ctrl-n`/`Ctrl-p`, opens with Enter, and closes with Escape. In Insert mode
-the completion popup appears after one of the server's trigger characters, on
-Insert `Ctrl-x`, or when `Space l c` enters Insert mode and asks explicitly.
-It then filters locally as you keep typing; `Tab` accepts and `Escape`
-dismisses. In an editable explorer, `Escape` also leaves Insert mode in that
-same press, because a directory row's structural `/` can open path completion
-without an explicit request. An automatic word-completion popup behaves the
-same way: `Escape` dismisses it and returns to Normal mode in one press.
-An explicit `Ctrl-x` request includes the identifier already before the caret,
-uses the server's `filterText` and `sortText` when present, and remains the
-active completion source until space, newline, acceptance, or dismissal.
-Typing punctuation does not hand that session to word or path completion; a
-trigger character refreshes its candidates for the new language context. If the
-current prefix has no matches the popup disappears without ending the session,
-so Backspace can reveal matching LSP candidates again. Backspace and Delete
-keep the session; moving the caret or running another editing command ends it.
-Enter is deliberately not an accept key for any completion source: a popup
-can open on its own — after a trigger character, or for any three-character
-word prefix — so Enter always inserts its usual newline and dismisses
-whatever was showing, rather than risking an unwanted candidate on a keystroke
-meant to end a line. A completion that needs an import applies both edits as a
-single undo step, and so does a rename across a file. All edits made between
-entering Insert mode and returning to Normal mode are likewise one undo step;
-undo and redo map the caret through the inverse edit instead of leaving it at
-a stale character offset.
-
-Path completion does not require a language server. In Insert mode, it opens
-a filterable popup of a directory's files and subdirectories as soon as the
-text immediately before the caret is a valid absolute or relative directory
-followed by a fragment of a name, which reopens it on any keystroke that
-leaves such a path before the caret — not only on typing `/`, so editing an
-already-typed path (moving the caret and continuing to type) shows hints just
-as typing it fresh would. Relative paths are resolved against both the active
-file's parent and the stable project root, so spellings such as `dir/`,
-`files/`, `./files/`, and `../files/` can follow whichever context makes them
-valid. Directory candidates retain a trailing `/`; accepting one immediately
-offers its children. A directory with more names than the popup will show is
-offered as its first few hundred in order, and typing more of a name narrows
-against the whole directory rather than against what the popup happened to be
-showing, so a name that exists is reachable however large the directory it
-sits in. The command palette's rows for a path argument work the same way.
-
-Word completion offers words already seen elsewhere in the workspace — every
-open buffer contributes, including the explorer, whose entries are filenames.
-It needs no language server and no trigger key: once a typed prefix reaches
-`editor.word_completion_minimum` characters (3 by default), the popup appears
-on its own in file buffers, the scratch buffer, and the commit message, using
-the same filtering, navigation, and acceptance as language and path
-completion. A word contains Unicode letters and numbers. A hyphen stays part
-of it only when it joins characters on both sides, so `up-to-date` stays whole;
-all other punctuation is a boundary and is never included in a candidate.
-This keeps the list focused on prose words, numbers, and source-code name
-fragments. Candidates from the buffer being typed in come first, ordered by
-how often each occurs there,
-followed by words from every other buffer in the same order; the word
-currently being typed is never offered as a completion of itself. A background
-index maintains this off the main thread, so a candidate can be one keystroke
-stale but a keystroke never waits on it. `Ctrl-x` still wins outright, replacing
-a word popup as soon as the request is sent, and a path in progress takes over
-the moment `/` is typed unless an explicit LSP session is active; word
-completion never overrides either one. Turn
-it off, or change the trigger length, with `editor.word_completion` and
-`editor.word_completion_minimum` in `Space o o`.
-
-### Text objects
-
-`m i` selects inside a text object and `m a` selects around it, spelled as
-Helix spells them. Every object works at every cursor, and the result is left
-in Select mode, so `d`, `c`, `y`, and `p` act on it and a motion extends it.
-
-| Key | Object |
-| --- | --- |
-| `m i w` / `m a w` | The word under the cursor / with the space beside it |
-| `m i W` / `m a W` | The WORD, everything between whitespace / with the space beside it |
-| `m i p` / `m a p` | The paragraph's lines / with the blank lines beside them |
-| `m i (` / `m a (`, also `[`, `{`, `<`, `"`, `'`, `` ` `` | Inside / around the enclosing pair; closing brackets are aliases |
-| `m i m` / `m a m` | Inside / around the closest enclosing pair of any of those kinds |
-| `m i f` / `m a f` | Inside / around the enclosing function |
-| `m i t` / `m a t` | Inside / around the enclosing type, such as a class or struct |
-| `m i a` / `m a a` | Inside / around the enclosing argument or parameter |
-
-Words and paragraphs are read from the text alone, so they work in every
-buffer. A word is a run of letters, digits, and `_`, a run of punctuation, or
-a run of whitespace; a WORD is everything between whitespace. Around adds the
-whitespace after the word, or the whitespace before it when nothing follows on
-the line. Neither crosses a line break, and a cursor on an empty line has no
-word. A paragraph is a run of lines holding text, separated by lines that are
-empty or hold only whitespace; on a blank line, `m i p` selects the run of
-blank lines. Around adds the blank lines after the paragraph, or before it
-when it ends the file. A paragraph is selected as whole lines, the way `x`
-selects them, so `m i p d` removes its lines and `x` extends the selection.
-
-Delimiter pairs resolve through the syntax tree when the buffer has one, which
-tells a bracket in code from one in a string. Where there is no tree — plain
-text, a language without a grammar, or a file still parsing — or the tree
-finds no enclosing pair, as inside a comment, a balanced scan of the text
-answers instead. Brackets nest and may span lines; the scan reaches 65,536
-characters on each side of the selection. Quotes pair up from the start of the
-line, so a quoted string spanning lines is not found this way. A delimiter
-escaped with a backslash is text. Asking again with a pair already selected
-grows to the next pair out. In ordinary Markdown prose, where punctuation is
-not represented by delimiter nodes, the scan is bounded to the enclosing
-Markdown syntax node first.
-
-Functions, types, and arguments need the syntax tree. Without one they report
-why and leave the selection alone.
-
-### Structural syntax
-
-| Key | Action |
-| --- | --- |
-| `Space x e` / `Space x s` | Expand / shrink syntax selection |
-| `Space x p` / `Space x c` | Select syntax parent / first child |
-| `Space x h` / `Space x l` | Select previous / next syntax sibling |
-| `Space x o` | Open the immediate Tree-sitter document outline |
-| `Space x x` | Toggle the syntax fold at the cursor |
-| `Space x f` / `Space x u` | Fold / unfold all syntax regions in this pane |
-| `Space x [ f/c/p` | Go to the previous function / class / parameter |
-| `Space x ] f/c/p` | Go to the next function / class / parameter |
-
-Structural expansion retains Tree-sitter's half-open bounds. Relationship
-commands and the syntax [text objects](#text-objects) present those same
-bounds with the block cursor on the last included character, matching ordinary
-Select mode; yank, delete, change, and indentation still act on exactly the
-highlighted syntax span.
-
-`editor.auto_close` is off by default. Enable it in `Space o o` to pair typed
-Insert-mode `()`, `[]`, `{}`, single quotes and double quotes. The caret stays
-inside the pair; typing a matching closer already under it moves past that
-character. Backspace between an empty pair removes both characters, including
-pairs already present in the document. Openers pair before whitespace, closing
-punctuation, or the end of the buffer. Quotes also need a non-word boundary
-before them; escaped quotes and apostrophes within words stay literal. This is
-a local text heuristic, independent of language syntax. Paste, Replace mode,
-prompts and terminal input remain literal. Each caret is handled independently.
-
-`o` and `O` preserve the current row's exact leading spaces and tabs, placing
-the new caret after that indentation. They do not continue list markers or
-add a syntax-driven indentation level. This also works with smart newline off.
-
-In Insert mode, Enter preserves the row's exact leading tabs/spaces and adds
-at most one level in `editor.indent` style when the syntax indentation query
-requests it; a grammar that requires a tab still gets a tab. With
-`editor.smart_newline` enabled, as it is by default, Markdown list items
-continue on Enter: bullets keep their marker, numbered and lettered items
-advance, and task items start unchecked. Enter on an empty item ends the list.
-Backspace directly after a marker changes it to a continuation indent, whether
-or not text follows the caret; another Backspace removes that alignment in one
-press. Each of these edits renumbers the numbered or lettered items after the
-one it adds or removes while they were in sequence, passing over nested items,
-continuation lines, and blank lines; a list numbered `1.` throughout or one
-with a gap keeps its numbers from that point on. A single `I.` or `V.` advances
-as a letter unless the preceding sibling establishes Roman numbering. In other
-file types, smart newline retains the existing alignment under a list item's
-content. With `editor.smart_newline: false`, Enter preserves only the row's
-existing leading indentation.
-Unsupported, malformed, oversized, and unterminated-final-line cases retain
-the exact prefix and never block newline insertion. Syntax folds
-are pane-local: two panes may collapse different regions of one shared buffer,
-and any edit invalidates both panes' revision-scoped folds. A collapsed row is
-marked by an accent-colored `▸` between its line number and the gutter rule;
-its muted `… N lines` suffix reports how many complete rows are hidden.
-
-Language servers may not create, rename, or delete files. A workspace edit
-that asks for one has those operations reported and skipped, and files a
-rename touches are opened as buffers rather than written behind your back.
-Text edits must name absolute local files inside the project and exact,
-forward-ordered character boundaries; malformed, remote, out-of-range, and
-overlapping edits reject the complete multi-file change. Open target buffers
-are guarded at the revisions from which a request was made, including targets
-other than the command's source buffer. Versioned diagnostic publications are
-likewise ignored after their open document advances.
-
-### Plugins
-
-Type `::` for the plugin-only command palette, with completion and descriptions.
-Plugins can declare short names such as ru-time's `::time`, `::time-add`, and
-`::time-delete`. Full `:plugin.<id>.<command>` names remain available.
-Conflicting short names are disabled for all claimants and reported in
-`:notifications`; stopping a claimant restores a name when it becomes unique.
-Backspace over the second colon returns to the ordinary command palette.
-
-`:plugins` opens the native manager for configured, disabled and failed plugins.
-Select an entry to inspect its capabilities, jobs, activity, helpers and diagnostic
-summary; Enter offers lifecycle actions. `:plugin-stop <id>` stops an owner and
-`:plugin-restart <id>` requests a fresh connection after cleanup finishes.
-Stopping a pending restart cancels it. Retained views remain readable and dirty
-provider documents remain editable. Restart does not replay old actions.
-
-Explicitly enabled process plugins can register commands, read the invoking
-buffer's text and selections, and return replacements as one undoable edit.
-They run asynchronously; changing the invoking text rejects stale results.
-Persistent hosts retain their plugin processes across TUI detach and reattach.
-In an application view, Tab offers actions from its plugin. Plugins supporting
-row-dependent actions can tailor that list to the selected rows: for example,
-a connected database can offer Disconnect while a disconnected one offers
-Connect. Multiple selected rows offer only actions common to all of them.
-Moving the selection after opening the menu requires reopening it; changed
-models are checked again before an action runs. Other plugins retain their
-view-wide menus.
-
-Plugins can give actions readable labels and group the Tab menu into named
-sections. Headings cannot be selected; typing filters actions across sections.
-Enter can still open the selected item when its internal callback is hidden
-from the menu. View titles identify the content, and plugins can place labelled
-facts such as filters or a database path above it.
-
-A plugin can open a complete read-only document on demand. It scrolls, searches
-and copies as one buffer, including content received in internal chunks. The
-supported body limit is 8 MiB and 250,000 lines; loading can fail when the host's
-shared memory allowance is occupied. A shortened preview remains a preview until
-the plugin loads and publishes the complete content.
-
-Application plugins also provide retained native views, typed commands,
-finite background jobs, explicit buffer/selection operations and bounded local
-filesystem operations with native confirmation, plus native prompts, filterable
-choices and forms with masked secret fields. Plugin text and secret fields reject
-an entire paste if it contains control characters (including a trailing newline)
-or exceeds the field's byte or character limit. Feedback identifies the cause;
-the existing value and cursor stay unchanged. Required fields and minimum lengths
-are checked when submitting the form.
-
-Applications can also create named unsaved documents and save them asynchronously:
-later edits stay dirty, and pending or uncertain writes cannot silently complete
-a close or `--wait` request.
-Applications can subscribe to buffer, pane, owned view/job and attachment metadata
-with consistent baselines and bounded ordered delivery. New-buffer discovery
-needs no polling; slow consumers receive an explicit resynchronization marker.
-Opted-in form fields can validate asynchronously after Enter. Editing keeps the
-form open and rejects stale results; secret values reach validation only when
-that field explicitly opts in. Validation runs without blocking editor input.
-Plugins can also opt text fields into local path completion. Type a directory
-or filename prefix, select with Up/Down, and press Tab to complete. Directory
-suggestions continue into that directory. Shift-Tab returns to the previous
-field and Escape cancels. Enter completes the selected suggestion while the
-typed path does not name an existing entry, and submits once it does. Relative paths start at the workspace
-root; spaces and quotes are literal, and `~` or environment variables are not
-expanded. Older hosts retain the plugin's ordinary text field behavior.
-Provider applications can also open version-bound UTF-8 documents with normal
-editing, syntax highlighting and remote saves. Providers with conditional writes
-save normally; weaker providers require native foreground confirmation describing
-the overwrite race and replacement guarantee. Cancelling preserves text and undo.
-Newer edits remain
-dirty during uploads; save-and-close waits for confirmed success. Explicit rebind
-reconciles restarted providers and uncertain writes. `:diff-remote` compares fresh
-remote text with local edits without changing the saved baseline; both sides must
-fit the 4 MiB comparison limit. Native `:reload` reads fresh remote text; dirty
-or uncertain documents offer reload, keeping local edits against a new baseline,
-or cancellation.
-Reload is one undoable edit and preserves earlier history. Unknown writes require
-provider settlement before accepting a baseline. Each side may contain at most
-8 MiB. See [provider recovery](plugins/applications.md#native-reload-and-conflict-recovery).
-The runnable
-[SFTP browser and editor](plugins/applications.md#sftp-browser-and-editor) verifies
-SSH host keys, uses explicit identity files or an existing SSH agent, and opens
-remote UTF-8 documents up to 8 MiB. Run `::sftp .` with its documented
-profile; Enter opens a selected file, and native `:write` confirms the remaining
-remote overwrite race. The [FTP/FTPS example](plugins/applications.md#ftp-and-ftps-browser-and-editor)
-shares the browser and editor workflow using standard-library transport. It
-defaults to certificate-verified FTPS with encrypted data connections; unencrypted
-FTP is an explicit profile choice and is labeled in the UI. FTP and FTPS require
-native save confirmation of non-atomic replacement and read credentials from an
-explicit private file. In either remote browser, `download` prompts for a new local path
-and stages up to 8 MiB of arbitrary file bytes before native filesystem
-confirmation. When the browser shows `Download ready`, use `confirm-download`
-to present the native review; downloads never publish automatically.
-`cancel-download` cancels unaccepted work. Remote identities stay separate from
-local files. The
-[application guide](plugins/applications.md) also includes runnable task-list,
-local file-manager, document, memory-provider and background-job examples and
-lists the remaining work.
-The [todo showcase](plugins/todo/README.md) provides matching Python, Rust and C
-applications with task creation, completion, removal and filtering.
-
-Applications can launch [managed helpers](plugins/applications.md#managed-helpers)
-with bounded binary input and retained output. Their output stays separate from
-the plugin protocol. Closing a helper or stopping its plugin cleans up and reaps
-the owned process tree; naturally exited output stays readable until released.
-The runnable helper controller demonstrates Send, Flood, EOF and Close actions
-without a network service. Enabled idle helpers alone do not prevent persistent
-host retirement. Applications can also publish owner-labelled notifications
-without changing focus or current action feedback. Explicit native handoffs can
-open a terminal session, an HTTP/HTTPS URL in the system browser, or an existing
-workspace file with its system handler. A terminal handed to the editor survives
-plugin stop and follows normal terminal-session retention. See the
-[handoff example](plugins/applications.md#notifications-and-native-handoffs).
-
-Continuing playback or service work can hold a renewable
-[activity lease](plugins/applications.md#continuing-activity), lasting at most ten
-minutes per grant. Session health and `:service-health` identify its owner, title
-and state. Active leases and their two-second cancellation cleanup grace protect
-normal quit and idle retirement; detach keeps them running. An owner that does
-not acknowledge expiry or cancellation is stopped, cleaning up its managed
-helpers. The `:q!` spelling does not bypass this protection. Use `:plugins` to
-stop the owner before quitting; in persistent mode, `:detach` leaves its work
-running. Explicit forced persistent-session stop remains available.
-
-The optional [local media controller](plugins/applications.md#local-media-controller)
-plays workspace audio and video files through an installed mpv. Its native
-playlist provides play, pause, relative seek, next, previous and stop actions;
-video appears in mpv's external window. Playback continues across detach and
-protects the persistent session while active. Pausing releases that protection;
-stop closes the owned player. The [service adapter guide](plugins/media-services.md)
-describes Spotify prerequisites and YouTube browser playback separately.
-
-Applications can read their configured settings and save bounded nonsecret
-workspace preferences through the [settings and state API](plugins/applications.md#settings-and-workspace-state).
-State updates check the revision observed by the application and preserve existing
-data on conflict. The runnable `preferences.py` example demonstrates a configured
-default and a saved destination that survives restarting the editor. Secrets
-belong in an established credential manager or authentication helper.
-
-The SFTP and FTP/FTPS browsers can upload a workspace disk file of at most 8 MiB
-with `upload`. Preparation freezes its bytes; `confirm-upload` then opens native
-confirmation for the remote destination. Unsaved editor text is separate from the
-disk file. `cancel-upload` cancels pending work, while an unknown promotion outcome
-remains visible and blocks another upload until explicit plugin restart. See
-[binary uploads](plugins/applications.md#binary-uploads-from-workspace-disk-files).
-
-The SFTP and FTP/FTPS reference browsers also provide `mkdir`, `rename` and
-`delete` actions for one remote file or empty directory. After preparation,
-`confirm-operation` opens native confirmation; `cancel-operation` cancels pending
-work. Deletion is permanent, checks are best effort, and an unknown outcome must
-be inspected before any retry. Existing remote documents keep their original
-identity and unsaved text. See the [remote operation guide](plugins/applications.md#confirmed-remote-directory-operations).
-
-The runnable example, installation and configuration, command bindings, errors,
-subscription behavior, limits and stable API are in the
-[plugin guide](plugins.md). There is no package manager or automatic plugin
-discovery. Enabled programs run with your permissions; they are not sandboxed.
-
-### Commands
-
-Pressing `:` opens the categorized command palette with every command, its
-aliases, usage, and short description. Filtering searches canonical names,
-aliases, descriptions, and categories. Commands whose active-buffer service
-is unavailable remain discoverable but are dimmed with a reason; activating
-one leaves the typed command and editor state intact. Use Up/Down to select a
-result, Tab to complete it, Enter to run it, and Escape to close the palette.
-Once a command with a path argument is selected, the rows become bounded
-filesystem hints from the editor working directory (or from the absolute path
-being typed). Directories appear first with a trailing separator; completing
-one keeps the palette open for its children, while running `:open` on it opens
-the editable directory explorer. A leading `~` means the user's home directory,
-so paths such as `:open ~/.bashrc` and `:open ~/projects` work without shell
-expansion. Dotfiles are offered when their name begins with `.` or hidden files
-are enabled.
-
-Every path prompt treats Enter the same way: the palette's path arguments, the
-`Space / p` finder path, and plugin fields that complete local paths. While
-hints are showing and the typed path does not name an existing file or
-directory, Enter accepts the selected hint exactly as Tab does. Once the path
-exists, Enter submits it, so `:cd sr` Enter Enter completes to `src/` and then
-changes into it. A new name that is a prefix of an existing one is completed
-too: `:w notes` beside `notes.md` becomes `:w notes.md`. Hints only follow a
-cursor at the end of the line, so press Left and then Enter to submit `notes`
-as typed. Completion in a buffer, of
-words, language-server items, or paths, still takes only Tab; Enter there
-inserts a newline.
-
-```text
-:cd <path>               change the working directory; retarget an active explorer
-:about                   show Runyte's logo, version, and getting-started guide
-:tutorial [reset|sessions]
-                        open or resume the interactive tutorial; reset starts
-                        over and sessions opens its persistent-session lesson
-:zen                     toggle a centered, maximized editable writing viewport
-:fullscreen              toggle the active pane across the whole editor area, at its ordinary width
-:close                  close the active buffer in place (aliases: c, buffer-close, bc, close-buffer, cb)
-:close!                 discard unsaved text and close the active buffer (aliases: c!, buffer-close!, bc!)
-:window-close           close the active pane, but not the last one (alias: wc)
-:buffer-new             open a new scratch buffer in the current pane (alias: new)
-:diff-disk              compare a fresh disk snapshot with the active file buffer
-:diff-remote            compare a fresh remote snapshot with the active provider document
-:diff-this              mark this buffer, or compare it with the one marked before it (aliases: difft, dt)
-:diff-off               close the comparison this buffer is part of (alias: do)
-:explorer [path]        open an editable directory explorer (alias: files)
-:file-picker            open the Finder over files, buffers, and terminals
-:file-picker-directory  fuzzy-find below the active file/explorer directory
-:open-explorer-finder   open the Finder at the active explorer's directory
-:fuzzy-grep             open the Finder in content mode
-:fuzzy-grep-directory   fuzzy-search contents below the active file/explorer directory
-:format                 format the active buffer (alias: fmt)
-:git-blame              show live-buffer attribution for the primary line
-:git-blame-file         open full-file live-buffer attribution
-:git-branches           open the local and cached remote branch list
-:git-cancel             stop the active Git operation and reconcile mutations
-:git-commit             write a message and commit what is staged
-:git-diff               show the active file's unstaged diff
-:git-diff-side-by-side  compare the active file's complete Git versions
-:git-discard            throw away a file's uncommitted changes, after a confirmation
-:git-index              review everything staged for the next commit
-:git-log                open the Git log, or refresh it from its first page
-:git-search-commits     fuzzy-search commits by message, ID, author, or date with a full-message preview
-:git-refresh            refresh Git state or retry failed repository discovery
-:git-stage              stage the active file, or every file selected in the list
-:git-stage-hunk         stage the exact hunk under the cursor
-:git-stage-lines        stage the supported saved source-line selection
-:git-stash-all <name>   stash tracked worktree and index changes, after a confirmation
-:git-stash-apply        apply the selected stash without dropping it, after a confirmation
-:git-stash-drop         drop the selected stash, after a confirmation
-:git-stash-tracked <name>
-                        stash a tracked-worktree snapshot, leaving the index applied
-:git-stash-untracked <name>
-                        stash tracked changes and untracked files together
-:git-stashes            open or refresh the bounded stash list
-:git-status             open the changed-file list
-:git-unstage            unstage the active file, or every file selected in the list
-:git-unstage-hunk       unstage the exact staged hunk under the cursor
-:git-worktrees          open the repository worktree list
-:git-compare            compare committed tips with the selected branch or worktree
-:grammar [runyte]       report the active Runyte editing grammar
-:help [topic]           open the general manual, optionally at a named section (alias: ?)
-:log-open               open the diagnostic log owned by the process that
-                        holds this workspace
-:lsp-trust              choose workspace permission to run language servers
-:lsp-restart [language] restart stopped language servers
-:lsp-status             report language server state
-:notifications          open retained notification history (alias: not)
-:service-health         inspect syntax, LSP, providers, and helper health (alias: health)
-:plugins                open the configured plugin manager
-:plugin-stop <id>       stop a configured plugin or cancel its pending restart
-:plugin-restart <id>    restart a configured plugin after its cleanup finishes
-:hsplit [path]          create a stacked split (alias: split)
-:open <path>            open a file or directory in the active pane (aliases: e, edit)
-:path                   show the active buffer's absolute path in a popup;
-                        Tab offers copying it to the system clipboard or the
-                        unnamed Runyte register
-:detach                 disconnect this persistent TUI while retaining all editor state
-:quit                   close the pane and its unique buffer, or stop safely from the last one (alias: q)
-:quit!                  discard its unique buffer, or force quit from the last pane (alias: q!)
-:quit-all               quit safely regardless of pane count, without ending terminals (alias: qa)
-:quit-all!              discard buffer changes and quit, without ending terminals (alias: qa!)
-:quit-here              quit and return the shell to the active directory (alias: qh)
-:quit-here!             discard changes, quit, and return there (alias: qh!)
-:reload                 reload the active local/provider file or refresh the explorer or supported Git list
-:resize-right +/- N     grow or shrink the pane at its right edge by N cells
-:resize-left +/- N      grow or shrink the pane at its left edge by N cells
-:resize-top +/- N       grow or shrink the pane at its top edge by N cells
-:resize-bottom +/- N    grow or shrink the pane at its bottom edge by N cells
-:outline                open the immediate Tree-sitter document outline
-                        (alias: document-outline)
-:config                 open the settings menu (alias: settings)
-:config-reload          re-read the loaded configuration file into this session
-:write-config [path]    write the effective configuration to a new file
-:write-config! [path]   write it, replacing an existing file
-:context-access [identity]
-                        review, grant, inspect, or revoke agent context access
-:terminal [command]     run a program in this pane, or $SHELL (aliases: t, term)
-:terminal-file-directory [command]
-                        run from the active file's parent
-:terminal-directory-root [command]
-                        run from the active explorer root
-:terminal-selected-directory [command]
-                        run from the selected directory entry
-:terminal-session-directory <number|name>
-                        run a shell from another terminal's safe directory
-:terminals              list the running terminals and show one here
-:terminal-show <number|name>
-                        show a terminal in this pane
-:terminal-rename <name> name this pane's terminal
-:terminal-output        copy this terminal's output into a read-only buffer
-:terminal-send [number|name]
-                        send the selection, or the whole buffer, to a terminal
-:theme [name]           choose a theme in the settings menu, or switch
-                        straight to the named one
-:vsplit [path]          create a side-by-side split
-:write [path]           save, optionally choosing a path (aliases: w, save)
-:write! [path]          save, replacing an existing file or one that changed
-                        on disk (aliases: w!, save!)
-:write-quit             save, then close the pane or quit from the last one (alias: wq)
-:write-buffer-close     save and close the buffer in place (alias: wbc)
-:session-1 … :session-9 attach directly to the numbered running persistent session
-:session-list           open the session manager (Unix persistent mode or Windows native controls; alias: sl)
-:session-attach WORKSPACE
-                        attach to another workspace's persistent session
-                        (alias: attach)
-:session-stop [WORKSPACE]
-                        stop a clean persistent session
-:session-rename WORKSPACE NAME
-                        rename a persistent session
-:session-clean          clean verified stopped session history (Windows)
-```
-
-The working directory starts at the directory where Runyte was launched.
-`:cd <path>` changes it; relative paths are resolved from the current working
-directory. When an explorer is active, `:cd` also retargets that explorer.
-From a normal file buffer it leaves the file open. `Space e` opens the active
-buffer's directory and selects that file, so Enter returns to its buffer.
-From a rendered Markdown page, it uses the source document's directory and file.
-`Space E` opens the working directory. A pathless buffer falls back to the
-working directory. `Space f` (or `Space / f`) always opens the stable-project
-Finder in name mode, while `:fuzzy-grep` opens its content mode.
-`:file-picker-directory` and
-`:fuzzy-grep-directory` search the active file's parent, the active explorer's
-current root, or the working directory for a pathless/generated buffer.
 
 ### Change the shell directory on exit
 
@@ -5781,6 +5499,7 @@ The working directory starts where Runyte was launched.
 | `:path` | | Show the active buffer's absolute path in a wrapped popup; Tab offers copying it to the system clipboard (`s`) or the unnamed Runyte register (`r`) |
 | `:cd <path>` | | Change the working directory; retarget an active explorer |
 | `:explorer [path]` | `files` | Open an editable directory explorer |
+| `:preview` | — | Native document preview of selected text or the complete buffer |
 | `:render` | `markdown` | Render a Markdown document, or return to its source |
 | `:diff-disk` | | Compare a fresh disk snapshot with the active file buffer |
 | `:diff-remote` | | Compare a fresh remote snapshot with the active provider document |
@@ -5908,7 +5627,7 @@ The working directory starts where Runyte was launched.
 | `:theme [name]` | | Choose a theme in the settings menu, or switch straight to the named one |
 | `:help [topic]` | `?` | Open the general manual, optionally at a named section |
 | `:about` | | Show Runyte's logo, version, and getting-started guide |
-| `:tutorial [reset\|sessions]` | | Open or resume the tutorial; `reset` starts over and `sessions` opens its persistent-session lesson |
+| `:tutorial [reset\|sessions\|next]` | | Open or resume the tutorial; `reset` starts over, `sessions` opens its persistent-session lesson, and `next` continues a completed exercise |
 | `:grammar [runyte]` | | Report the active Runyte editing grammar |
 | `:notifications` | `not` | Open retained notification history |
 | `:service-health` | `health` | Inspect syntax, LSP, providers, and helper health |
@@ -6615,6 +6334,7 @@ says so when you save them:
 | Setting | Why it needs a restart |
 | --- | --- |
 | `editor.mouse` | Mouse capture is set up when the terminal is opened. |
+| `editor.font_size` | The native window reads its font size when it opens. |
 | `lsp.enable` | Language servers are started or suppressed at startup. |
 | `mode` | The launch mode is chosen before the editor starts. The saved value applies to future launches. |
 
@@ -6640,62 +6360,42 @@ file's inherited value; otherwise it explains the varying inheritance and shows
 the global default.
 
 The same rules can be authored in YAML:
-When `XDG_CONFIG_HOME` is unset or empty, Linux and macOS use
-`~/.config/runyte/config.yaml`. The Windows port uses
-`%APPDATA%\runyte\config.yaml`.
-Empty environment values are ignored. If neither the override nor the
-platform default is available, no default configuration file is selected.
-Use `--config <path>` to load another file. A relative path is anchored to the
-directory where Runyte was launched, even when workspace initialization later
-enters another directory. All fields are optional.
 
-Open the registry-backed `[config]` buffer with `Space o o`, `:config`, or
-`:settings`. It is a left-aligned, read-only, searchable document: normal
-motions, selections, splits, and keybindings continue to work. Its
-columns show setting, saved value, and description, in that order. Setting and
-value widths follow their content, separated by two spaces; descriptions have
-no inserted line breaks or trailing padding. Setting names use the theme's
-function colour, values its constant colour, and descriptions normal text.
-Each setting occupies one logical line. The page follows `editor.soft_wrap`:
-`Space p s` toggles ordinary pane-width visual wrapping, and horizontal scrolling
-reaches long lines when wrapping is off. Wrapped continuations use normal
-buffer layout rather than aligning beneath the description column. Enter
-anywhere on a setting's line, including a visual continuation, opens its value
-popup. Finite grammar, boolean, and theme values use a choice list; numeric values use a typed popup
-that shows and enforces the registry's minimum and maximum. Moving through an
-immediate choice previews it, Escape rolls the preview back, and Enter
-atomically patches the loaded YAML file while preserving comments, ordering,
-and unknown fields.
-`Space o t` and a bare `:theme` open the theme choices directly. That list is
-the one long enough to be worth reading in halves, so `Tab` narrows it to the
-dark themes, then to the light ones, then back to every theme; the popup title
-names the group it is showing. The grouping comes from each theme's own
-background, so a theme declared in `themes:` is sorted into the same halves as
-a built-in one. Typing still filters within whichever group is shown. Changing
-`lsp.enable` is saved but explicitly reports that a restart is required; the
-menu never presents it as a live server transition.
-Changing `workspace.mode` is also restart-required because the standalone or
-persistent launch path is selected before the editor application starts; the
-saved choice applies to future bare launches.
-`workspace.idle_retirement_minutes` is in the same menu but applies at once: a
-persistent host reads it each time it considers retiring, so a shorter or
-longer interval takes effect without restarting the host it governs. Its
-default is `0`, which keeps idle hosts running; set a positive interval to
-retire them automatically, or use `:session-stop` to stop a host explicitly.
-Unrelated YAML flow collections (`{...}` and `[...]`), including multiline
-ones, are preserved when saving a setting. The setting being changed must
-still be a scalar in a block mapping; editing inside a flow mapping is not
-supported. YAML features that cannot be patched losslessly are rejected with the file
-left untouched. A failed save also rolls back any live preview while keeping
-the choice popup open for correction or retry.
+```yaml
+editor:
+  tab_width: 4
+  indent: spaces
+indentation:
+  languages:
+    python:
+      tab_width: 4
+    yaml:
+      tab_width: 2
+  files:
+    '**/generated/*.yaml':
+      tab_width: 4
+    'Makefile':
+      indent: tabs
+```
 
-`Space o s` or `:service-health` opens a read-only snapshot of syntax registry
-failures, the active document's LSP configuration and attachment, Git repository
-discovery (including a retained failure or pending retry), and the
-diagnostic log's owner role, level, resolved path, and any failure. The
-report probes paths only and remains useful when every optional service is
-absent. In persistent mode its `log` row describes the host that owns the
-workspace, not the client process that opened the report.
+Each field inherits independently: global default, language override, then
+matching file patterns in their YAML order. The last matching rule that sets a
+field wins. Editing an existing rule keeps its position; a new rule is appended.
+There are no built-in language overrides or content-based indentation detection.
+
+Patterns match paths relative to the workspace root, which does not change with
+`:cd`. A pattern without `/` matches a filename at any depth. `*` matches within
+a directory, `?` matches one character, and `**` spans directories; `**/` also
+matches zero directories. Use `/` on every platform. Absolute paths, `..`,
+backslashes, character classes and brace expansion are not supported. A pattern
+may contain at most 256 bytes, and each scope allows at most 128 entries.
+Matching does not scan the filesystem. Local files outside the workspace do not
+match file rules. Pathless and provider documents can use their detected language
+but have no local path for file rules.
+
+Overrides apply to existing open buffers immediately. Removing one changes how
+indentation is displayed and subsequently edited; it does not rewrite existing
+text. Editing the YAML manually takes effect through `:config-reload`.
 
 ### Writing configuration
 
@@ -6738,99 +6438,6 @@ though the running editor keeps its launch value until a restart. The written
 files carry no comments, and maps are written in name order, so writing the
 same configuration twice produces the same text.
 
-### Reloading configuration
-
-`:config-reload` re-reads the configuration file this editor loaded, including
-an explicit `--config PATH`, and brings the running editor into line with it.
-It is the supported path for changes made anywhere other than the `[config]`
-page: an edit in another editor, a file written by a script, or a correction to
-a plugin entry the host refused at startup. Nothing is watched or polled;
-the reload happens when the command runs, and only for the workspace the
-command was run in. Another running session reloads when you run it there.
-
-A reload that cannot be used changes nothing. Invalid YAML, a value outside its
-registry bounds, and a file that has been deleted are all reported with the
-running configuration left exactly as it was, so a half-written file cannot
-break a live editor. A file replaced atomically by a rename is read as its new
-contents; one truncated and rewritten in place can be caught mid-write, which
-fails as invalid YAML and can simply be reloaded again. A path that never had a
-file is not treated as a deletion: the reload reads the `themes.d` and
-`keybinds.d` directories beside it on their own, as startup does, and creating
-the file and reloading again is the way to start using one mid-session.
-
-Settings that were read before the editor existed are reported rather than
-adopted. `editor.mouse`, `lsp.enable`, `workspace.mode`, `workspace.state`, and
-`workspace.state_anchor`
-keep the value this process started with, and the status line names them as
-requiring a restart. The `[config]` page then shows the file's value as saved
-while the effective value stays what the editor is actually doing. Everything
-else applies immediately, including the theme, the `keys` section — dispatch,
-help, and key hints are all rebuilt from it together, with the keys of every
-running plugin laid back over it — and `notifications.history_limit`. A `keys`
-section that collides with a running plugin's binding is refused on its own,
-leaving the bindings in use alone while the rest of the file still applies. A `theme:` naming something that cannot be built
-keeps the theme already on screen and says so, rather than repainting the
-editor with the default.
-
-Language servers are reconfigured rather than restarted wholesale. A server
-whose `command`, `args`, and `initialization_options` are unchanged keeps its
-process, handshake, open documents, and diagnostics; only a language whose
-definition changed stops and starts again on the next request, and a language
-removed from the file simply stops. A recorded launch failure is forgotten for
-any definition that changed, so a corrected command is tried instead of the
-broken one being reported forever.
-
-Configured plugins are reconciled by their `id`, so moving an entry in the file
-is not a change to the plugin it describes. An entry whose configuration is
-unchanged keeps its running process untouched. A changed entry restarts its
-plugin, and a removed or disabled one stops it — but never while work is in
-flight. A plugin with a running job, an activity lease, a helper process,
-outstanding cleanup, an unsaved remote document, an unanswered command, local
-filesystem work, or a prompt you are part-way through keeps running exactly as
-it was; the change waits on its record, `:plugins` shows the pending state, and a
-notification says so. The wait ends by itself: as soon as that work is gone the
-saved entry takes effect and is reported. `:plugin-restart <id>`, or
-`:plugin-stop <id>` for an entry the file no longer enables, applies it sooner
-if you would rather not wait. An entry added to the file starts from the reload, and one that
-was disabled or refused at startup can be corrected and started the same way,
-without restarting the editor.
-
-```yaml
-editor:
-  tab_width: 4
-  indent: spaces
-indentation:
-  languages:
-    python:
-      tab_width: 4
-    yaml:
-      tab_width: 2
-  files:
-    '**/generated/*.yaml':
-      tab_width: 4
-    'Makefile':
-      indent: tabs
-```
-
-Each field inherits independently: global default, language override, then
-matching file patterns in their YAML order. The last matching rule that sets a
-field wins. Editing an existing rule keeps its position; a new rule is appended.
-There are no built-in language overrides or content-based indentation detection.
-
-Patterns match paths relative to the workspace root, which does not change with
-`:cd`. A pattern without `/` matches a filename at any depth. `*` matches within
-a directory, `?` matches one character, and `**` spans directories; `**/` also
-matches zero directories. Use `/` on every platform. Absolute paths, `..`,
-backslashes, character classes and brace expansion are not supported. A pattern
-may contain at most 256 bytes, and each scope allows at most 128 entries.
-Matching does not scan the filesystem. Local files outside the workspace do not
-match file rules. Pathless and provider documents can use their detected language
-but have no local path for file rules.
-
-Overrides apply to existing open buffers immediately. Removing one changes how
-indentation is displayed and subsequently edited; it does not rewrite existing
-text. Editing the YAML manually takes effect through `:config-reload`.
-
 ### Editing the file and reloading
 
 After editing the file by hand, run `:config-reload`. It re-reads the file
@@ -6858,7 +6465,7 @@ That includes the theme, `notifications.history_limit`, and the `keys`
 section. Key dispatch, help, and key hints are rebuilt together, with each
 running plugin's keys laid back over them.
 
-**What keeps its startup value:** `editor.mouse`, `lsp.enable`,
+**What keeps its startup value:** `editor.mouse`, `editor.font_size`, `lsp.enable`,
 `mode`, `workspace.state`, and `workspace.state_anchor`. The status
 line names them as needing a restart. The `[config]` page shows the file's
 value as saved, while the editor keeps using the startup value.
@@ -6925,6 +6532,7 @@ file-only.
 | `editor.hard_wrap_width` | `80` | 1–1000 | Width used by `Space p w` (hard wrap) and `Space p r` (reflow). |
 | `editor.scratch_markdown` | `true` | boolean | Treat the pathless scratch buffer as Markdown for `Space p r` and `?`. |
 | `editor.trim_trailing_whitespace` | `true` | boolean | Remove spaces and tabs at line ends when saving. |
+| `editor.font_size` | `15` | `8`–`48` | Native window font size in logical pixels. Read when a window opens; Ctrl-plus/minus change only the current window. |
 | `editor.mouse` | `true` | boolean | Capture the mouse for selection, scrolling, and pane resizing. `false` keeps the terminal's own text selection. Restart required. |
 | `editor.word_completion` | `true` | boolean | Suggest words already open elsewhere in the workspace. |
 | `editor.word_completion_minimum` | `3` | 1–32 | Prefix length before word suggestions appear. |
@@ -6932,6 +6540,7 @@ file-only.
 | `editor.selecting_motions` | `true` | boolean | `w/b/e/W/B/E` and `f/t/F/T` select what they cross, as in Helix. `false` moves a caret instead. |
 | `editor.auto_close_terminal` | `true` | boolean | Forget terminal sessions and their output when the program exits. `false` retains future exited sessions for review in the Finder and `Space t t`. |
 | `editor.terminal_theme_colors` | `true` | boolean | Use the active theme for terminal ANSI colours 0–15. Applies immediately, including existing output. |
+| `editor.preview_theme_colors` | `true` | boolean | Paint `:preview` Markdown, data and source pages in the active theme's colours. `false` keeps the light page. Applies immediately to open previews. |
 | `editor.command_mode_dim` | `true` | boolean | Gray out pane text while a command prompt is open. |
 
 #### Workspace settings
@@ -7704,6 +7313,10 @@ This is the list `:help key-actions` shows, grouped by topic.
 | `focus-window-right` | N S I R | last | Focus the pane to the right |
 | `next-window` | N S I R | last | Focus the next pane |
 | `swap-window` | N S I R | last | Swap this pane's content with the previously focused pane |
+| `move-window-left` | N S I R | last | Move pane to the left edge, full height |
+| `move-window-down` | N S I R | last | Move pane to the bottom edge, full width |
+| `move-window-up` | N S I R | last | Move pane to the top edge, full width |
+| `move-window-right` | N S I R | last | Move pane to the right edge, full height |
 | `close-window` | N S | last | Close the active pane |
 | `only-window` | N S | last | Close every pane except the active pane |
 | `equalize-windows` | N S | last | Equalize pane widths, then pane heights within each column |
@@ -8330,12 +7943,13 @@ src/
   clipboard.rs    testable operating-system clipboard adapters
   text.rs         rope storage, character offsets, and transactions
   selection.rs    multi-range selections over character offsets
+  grapheme.rs     bounded grapheme-cluster navigation and display widths
   syntax/         tree-sitter highlighting and the bundled grammar table
   lsp/            asynchronous language-server transport and typed events
   git/            bounded Git commands, projections, diffs, and status tracking
   terminal/       PTYs, emulation, bounded scrollback, and terminal sessions
   workspace/      persistent host state, attachment, and service lifecycle
-  protocol/       private versioned DTOs for bundled local clients (Unix)
+  protocol/       private versioned DTOs for bundled local clients on Unix/Windows
   command.rs      editor commands and shared display metadata
   headless.rs     frontend-independent semantic editor test facade
   snapshot.rs     owned presentation-neutral editor and overlay snapshots
@@ -8358,9 +7972,17 @@ src/
   keymap.rs       declarative bindings and sequence lookup
   layout.rs       recursive split tree
   notification.rs bounded workspace-lifetime history and its buffer document
+  media.rs        native media classification and presentation operations
+  document_preview.rs
+                  bounded, engine-independent document captures
   ui.rs           Ratatui widgets and editor frame composition
   wrap.rs         Unicode cell-aware visual-line and soft-wrap geometry
-  main.rs         CLI, event loop, and Crossterm terminal lifecycle
+  cli.rs, cli/    shared CLI, event loop, and terminal lifecycle
+  main.rs         terminal edition entry point
+crates/
+  runyte-native/  GPUI window, clipboard, media/PDF workers and helper lifecycle
+  runyte-preview/ isolated document rendering engine
+  runyte-desktop/ desktop executable and early helper dispatch
 ```
 
 The compatibility status for implemented, deviating, and removed Helix

@@ -8,3 +8,4 @@
   (service)
   (rpc)
 ] @indent.always
+["{" "(" "["] @indent.opener

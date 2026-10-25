@@ -598,6 +598,8 @@ impl App {
         }
         if let Some(id) = terminal {
             self.move_terminal_to_pane(id, pane_id);
+        } else {
+            self.refresh_markdown_page(target.buffer);
         }
         self.mode = Mode::Normal;
         self.status(if backward {
@@ -622,6 +624,13 @@ impl App {
 
     /// Runs a word motion, selecting the word it crosses when
     /// `editor.selecting_motions` is on.
+    ///
+    /// Select mode extends to where that selection's head lands rather than
+    /// to the offset a caret would move to, whatever the setting, as Helix's
+    /// extending word motions do. A caret's `w` stops on the next word's first
+    /// character, and an inclusive range extended there would take it too.
+    /// The walk reads inclusive ranges, so a half-open one, such as a syntax
+    /// expansion leaves, is converted first and the result is inclusive.
     pub(super) fn word_motion(&mut self, motion: Motion) {
         let (target, long) = match motion {
             Motion::WordForward => (WordTarget::NextStart, false),
@@ -632,18 +641,30 @@ impl App {
             Motion::LongWordBack => (WordTarget::PreviousStart, true),
             _ => unreachable!("only word motions select words"),
         };
-        if !self.selecting_motions_apply() {
+        let extend = self.mode == Mode::Select && self.active_terminal().is_none();
+        if !extend && !self.selecting_motions_apply() {
             self.motion(motion);
             return;
         }
+        let mut selection = self.active().selection.clone();
+        if extend && self.active().selection_semantics() != SelectionSemantics::Runyte {
+            selection = self.vim_half_open_to_inclusive(selection);
+        }
         let buffer = self.active_buffer();
-        let selection = self
-            .active()
-            .selection
-            .transform(|range| select_word_motion(buffer, range, target, long));
+        let selection = selection.transform(|range| {
+            let crossed = select_word_motion(buffer, range, target, long);
+            if extend {
+                range.extend_to(crossed.head)
+            } else {
+                crossed
+            }
+        });
         let pane = self.active_mut();
         pane.preserve_scroll = false;
         pane.replace_selection(selection);
+        if extend {
+            pane.mark_selection_semantics(SelectionSemantics::Runyte);
+        }
         self.reveal_active_selection_from_folds();
     }
 
@@ -829,6 +850,13 @@ impl App {
                 |segment| segment.start..segment.end,
             );
             let line: Vec<char> = line_string.chars().collect();
+            // A label replaces the two characters it covers, so neither may
+            // carry a mark or joiner that would be left behind.
+            let starts = crate::grapheme::clusters(line.iter().copied())
+                .flat_map(|cluster| {
+                    std::iter::once(true).chain(std::iter::repeat_n(false, cluster.chars - 1))
+                })
+                .collect::<Vec<_>>();
             let mut word_start = None;
             // One past the end closes a word that runs to the end of the row.
             for column in 0..=line.len() {
@@ -843,6 +871,8 @@ impl App {
                                 )
                             })
                             && line[begin..begin + 2].iter().copied().all(is_single_cell)
+                            && starts[begin + 1]
+                            && starts.get(begin + 2).is_none_or(|start| *start)
                         {
                             let screen_col = visual.segment.map_or_else(
                                 || {
@@ -999,8 +1029,17 @@ impl App {
         if matches!(self.mode, Mode::Insert | Mode::Replace) {
             self.buffers[buffer_id].begin_undo_group();
         }
+        let buffer = &self.buffers[buffer_id];
+        let changes_lines = transaction.changes().iter().any(|change| {
+            change.text.contains('\n')
+                || buffer.offset_to_row(change.from) != buffer.offset_to_row(change.to)
+        });
         let changed = self.apply_to_buffer(buffer_id, &transaction);
         if changed {
+            if changes_lines {
+                let pane = self.active_mut();
+                pane.horizontal_reset = Some((pane.buffer, pane.binding_generation));
+            }
             self.report_new_registry_errors();
         }
         changed
@@ -1169,6 +1208,11 @@ impl App {
             self.active_mut()
                 .replace_selection(Selection::new(ranges, selection.primary_index()));
         }
+        if !has_changes {
+            // Stepping over a closer is typing that leaves the revision
+            // alone, so the append record would otherwise read it as a move.
+            self.record_append_insert_carets();
+        }
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {
@@ -1235,7 +1279,10 @@ impl App {
                     let row = buffer.offset_to_row(head);
                     let row_end = buffer.line_to_offset(row) + buffer.line_len(row);
                     if head < row_end {
-                        Some(Change::new(head, head + 1, character.to_string()))
+                        // Overtyping replaces a whole character, never one
+                        // code point of an emoji sequence.
+                        let end = buffer.next_grapheme(head).min(row_end);
+                        Some(Change::new(head, end, character.to_string()))
                     } else {
                         Some(Change::new(head, head, character.to_string()))
                     }
@@ -1461,10 +1508,12 @@ impl App {
                                 .newline_indent(buffer.text(), &self.registry, newline_offset)
                                 .ok()
                         })
+                        // `prefix` already carries every enclosing level, so
+                        // only a container opening on this row adds one.
                         .map_or("", |indent| {
-                            if indent.tab_levels > 0 {
+                            if indent.opening_tab_levels > 0 {
                                 "\t"
-                            } else if indent.begin_levels + indent.always_levels > 0 {
+                            } else if indent.opening_levels > 0 || indent.ends_with_opener {
                                 unit.as_str()
                             } else {
                                 ""
@@ -1630,7 +1679,7 @@ impl App {
                     continue;
                 }
             }
-            ordinary.push((head - 1, head));
+            ordinary.push((buffer.previous_grapheme(head), head));
         }
         let mut changes = crlf_safe_deletions(buffer, ordinary);
         changes.extend(special);
@@ -1678,7 +1727,8 @@ impl App {
 
     pub(super) fn edit_delete(&mut self) {
         let buffer_id = self.active().buffer;
-        let len = self.active_buffer().len_chars();
+        let buffer = self.active_buffer();
+        let len = buffer.len_chars();
         let spans = self
             .active()
             .selection
@@ -1688,7 +1738,7 @@ impl App {
                 if !range.is_empty() {
                     return Some((range.from(), range.to()));
                 }
-                (range.head < len).then_some((range.head, range.head + 1))
+                (range.head < len).then(|| (range.head, buffer.next_grapheme(range.head)))
             })
             .collect::<Vec<_>>();
         let changes = crlf_safe_deletions(&self.buffers[buffer_id], spans);
@@ -1881,6 +1931,7 @@ impl App {
         }
         let selection = Selection::new(heads.into_iter().map(Range::point).collect(), 0);
         self.active_mut().replace_selection(selection);
+        self.append_insert = None;
         self.mode = Mode::Insert;
     }
 
@@ -2234,11 +2285,11 @@ impl App {
         if range.is_empty() || self.active().selection_semantics() != SelectionSemantics::Runyte {
             return range;
         }
-        let end = self.active_buffer().len_chars();
+        let buffer = self.active_buffer();
         if range.anchor <= range.head {
-            Range::new(range.anchor, (range.head + 1).min(end))
+            Range::new(range.anchor, buffer.next_grapheme(range.head))
         } else {
-            Range::new((range.anchor + 1).min(end), range.head)
+            Range::new(buffer.next_grapheme(range.anchor), range.head)
         }
     }
 
@@ -2461,16 +2512,20 @@ impl App {
             return Ok(());
         }
 
+        // Outline parents precede their children. Retain each row's depth
+        // even when filtering hides its ancestors, and bound padding so deep
+        // source nesting still leaves room for the name.
+        let mut depths = Vec::with_capacity(outline.items.len());
         let items = outline
             .items
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                PickerItem::new(
-                    item.name.to_string(),
-                    outline_item_detail(&outline.items, index),
-                    index,
-                )
+                let depth = item.parent.map_or(0, |parent| depths[parent] + 1);
+                depths.push(depth);
+                let label = format!("{}{}", "  ".repeat(depth.min(16)), item.name);
+                let detail = outline_item_detail(&outline.items, index);
+                PickerItem::searchable(label, &detail, format!("{} {detail}", item.name), index)
             })
             .collect();
         self.list_actions = outline
@@ -3703,7 +3758,7 @@ impl App {
                 } else {
                     let row = buffer.offset_to_row(range.to());
                     let row_end = buffer.line_to_offset(row) + buffer.line_len(row);
-                    (range.to() + 1).min(row_end)
+                    buffer.next_grapheme(range.to()).min(row_end)
                 };
                 (at, at, text, false)
             })

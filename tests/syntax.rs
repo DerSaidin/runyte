@@ -26,8 +26,8 @@ use runyte::{
 /// phase gate refers to it: a reparse must fit comfortably inside a redraw so
 /// typing never stalls.
 ///
-/// Generous enough to hold in an unoptimised debug build on a slow machine;
-/// the ratio assertion alongside it is the sharper check.
+/// Enforced by the serialized release performance job on Linux and macOS;
+/// concurrent debug and coverage suites cannot measure this wall-clock limit.
 const REPARSE_BUDGET: Duration = Duration::from_millis(50);
 
 fn parse(source: &str, language: &str) -> (Registry, Text, DocumentSyntax) {
@@ -1047,13 +1047,25 @@ fn newline_indentation_retains_ancestor_captures_in_later_injections() {
         ),
     ] {
         let (registry, text, syntax) = parse(&source, language);
-        for (marker, levels) in [("second() {\n", 1), ("(ready) {\n", 2), ("go();\n", 2)] {
+        for (marker, levels, opening) in [
+            ("second() {\n", 1, 1),
+            ("(ready) {\n", 2, 1),
+            ("go();\n", 2, 0),
+        ] {
             let newline = char_offset(&source, marker) + marker.chars().count() - 1;
             let indent = syntax.newline_indent(&text, &registry, newline).unwrap();
             assert_eq!(registry.language_name(indent.language), "javascript");
             assert_eq!(indent.injection_depth, depth);
             assert_eq!(
                 indent.always_levels, levels,
+                "{language} {marker}: {indent:?}"
+            );
+            // Only the blocks that begin on the row open a level beyond the
+            // row's own indentation; enclosing blocks are already in it. The
+            // trailing brace is the same opening seen as a token.
+            assert_eq!(
+                (indent.opening_levels, indent.ends_with_opener),
+                (opening, opening > 0),
                 "{language} {marker}: {indent:?}"
             );
             assert_eq!((indent.begin_levels, indent.tab_levels), (0, 0));
@@ -3825,11 +3837,12 @@ fn realistic_source() -> String {
 
 /// Phase 1 gate: an incremental reparse must be far cheaper than a full parse.
 ///
-/// The ratio is asserted rather than a wall-clock figure, so the test means the
-/// same thing on a slow machine and in a debug build: it is checking that
-/// tree-sitter's subtree reuse is actually engaged, which is the property that
-/// makes typing in a large file viable.
+/// Both the ratio and the absolute budget run in the serialized release gate.
+/// The ratio checks that tree-sitter's subtree reuse is engaged; the absolute
+/// limit checks that reparsing remains responsive. Ordinary syntax tests still
+/// verify incremental results against fresh parses without timing assertions.
 #[test]
+#[ignore = "wall-clock budget; run serialized in release mode by CI"]
 fn incremental_reparse_is_far_cheaper_than_a_full_parse() {
     let source = realistic_source();
     let registry = Registry::new();

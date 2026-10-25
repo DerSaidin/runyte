@@ -1,5 +1,13 @@
 # Development plans
 
+[GitHub Issues](https://github.com/runyte/runyte/issues) tracks requests,
+priorities, and delivery status. Keep substantial designs here when their
+architecture, constraints, or implementation sequence benefit from versioned
+review alongside the code. A routine issue does not need a plan. Link a plan to
+its tracking issue when one exists, and link the plan from the issue when
+publishing it. Keep detailed design and implementation checklists in the plan;
+keep user-facing progress and resolution on GitHub.
+
 Plans are grouped by their relationship to the current editor:
 
 - `active/` contains approved work that is still being designed or built.
@@ -15,6 +23,25 @@ Completed plans are decision records, not a second user guide. Current behavior
 belongs in `README.md`, `docs/user-guide.md`, the source, and the relevant file
 under `context/reference/`. When those disagree with a historical plan, the
 current sources take precedence.
+
+Active work:
+
+- [Terminal and desktop editions](active/PLAN_EDITIONS_AND_EXTENSIONS.md):
+  two editions built from one Cargo workspace, PDF and document-preview helpers
+  inside the desktop executable, one register of process boundaries and
+  extension tiers, release packaging for both editions, and a manually signed
+  and notarized macOS disk image.
+
+Current desktop ownership, supported behavior and measurements are recorded in
+[the desktop edition reference](../reference/desktop-edition.md), with the
+[document preview reference](../reference/native-document-preview.md) retaining
+its rendering and asset limits.
+
+Proposed work:
+
+- [Browser panes](proposed/PLAN_BROWSER_PANES.md): a design stub for interactive
+  web pages in native panes, evaluating CEF off-screen rendering, platform
+  portability and browser lifecycle ownership before implementation.
 
 The retained completed records cover:
 

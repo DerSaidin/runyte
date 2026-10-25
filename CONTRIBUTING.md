@@ -66,6 +66,10 @@ Read [`AGENTS.md`](AGENTS.md) before changing code. It describes the
 architecture, where each responsibility lives, and the conventions every change
 follows. A pull request should:
 
+- Link the relevant GitHub issue when one exists, and describe the cause,
+  resulting behavior, validation, and any remaining limitations. GitHub is the
+  primary issue tracker; a fix does not require a duplicate issue or resolution
+  record under `context/`.
 - Stay focused on one behavior, with tests at the boundary it changes.
 - Keep line coverage at or above the floor in
   [`context/reference/test-coverage.md`](context/reference/test-coverage.md).

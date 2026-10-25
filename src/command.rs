@@ -478,6 +478,8 @@ macro_rules! editor_commands {
                         | Self::MoveRight
                         | Self::MoveUp
                         | Self::MoveDown
+                        | Self::MediaMoveUp
+                        | Self::MediaMoveDown
                         | Self::MoveWordForward
                         | Self::MoveWordBackward
                         | Self::MoveWordEnd
@@ -732,6 +734,19 @@ editor_commands! {
     SearchPrevious => ("search-previous", "Select only the previous search match"),
     SearchSelection => ("search-selection", "Select every match of the selection or word"),
 
+    MediaShowPage => ("media-show-page", "Display the selected PDF page"),
+    MediaZoomIn => ("media-zoom-in", "Zoom into the image or PDF"),
+    MediaZoomOut => ("media-zoom-out", "Zoom out of the image or PDF"),
+    MediaFit => ("media-fit", "Fit the image or PDF page in its pane"),
+    MediaActualSize => ("media-actual-size", "Show media at actual raster size"),
+    MediaPanLeft => ("media-pan-left", "Pan media left"),
+    MediaPanRight => ("media-pan-right", "Pan media right"),
+    MediaMoveUp => ("media-move-up", "Move up in media; previous PDF page at fit"),
+    MediaMoveDown => ("media-move-down", "Move down in media; next PDF page at fit"),
+    MediaCopySelection => ("media-copy-selection", "Copy selected PDF text or image region"),
+    MediaBack => ("media-back", "Fit media, clear selection, or leave preview"),
+    MediaSelectAll => ("media-select-all", "Select all PDF text or the whole image"),
+
     AlignViewCenter => ("align-view-center", "Center the cursor line in the view"),
     AlignViewTop => ("align-view-top", "Align the cursor line at the top"),
     AlignViewBottom => ("align-view-bottom", "Align the cursor line at the bottom"),
@@ -748,6 +763,7 @@ editor_commands! {
     ),
     ToggleSoftWrap => ("toggle-soft-wrap", "Toggle soft wrapping"),
     ToggleWhitespace => ("toggle-whitespace", "Toggle whitespace markers"),
+    PreviewDocument => ("preview-document", "Preview selection or buffer (native window)"),
     ToggleMarkdownRender => (
         "toggle-markdown-render",
         "Show a Markdown document as formatted text, or return to its source"
@@ -898,6 +914,22 @@ editor_commands! {
     FocusWindowRight => ("focus-window-right", "Focus the pane to the right"),
     NextWindow => ("next-window", "Focus the next pane"),
     SwapWindow => ("swap-window", "Swap this pane's content with the previously focused pane"),
+    MoveWindowLeft => (
+        "move-window-left",
+        "Move pane to the left edge, full height"
+    ),
+    MoveWindowDown => (
+        "move-window-down",
+        "Move pane to the bottom edge, full width"
+    ),
+    MoveWindowUp => (
+        "move-window-up",
+        "Move pane to the top edge, full width"
+    ),
+    MoveWindowRight => (
+        "move-window-right",
+        "Move pane to the right edge, full height"
+    ),
     CloseWindow => ("close-window", "Close the active pane"),
     OnlyWindow => ("only-window", "Close every pane except the active pane"),
     EqualizeWindows => (
@@ -1306,7 +1338,19 @@ impl EditorCommand {
             | Self::OpenDirectoryFuzzyGrep
             | Self::GlobalSearch
             | Self::GlobalSearchRegex => CommandCategory::Search,
-            Self::AlignViewCenter
+            Self::MediaShowPage
+            | Self::MediaZoomIn
+            | Self::MediaZoomOut
+            | Self::MediaFit
+            | Self::MediaActualSize
+            | Self::MediaPanLeft
+            | Self::MediaPanRight
+            | Self::MediaMoveUp
+            | Self::MediaMoveDown
+            | Self::MediaCopySelection
+            | Self::MediaBack
+            | Self::MediaSelectAll
+            | Self::AlignViewCenter
             | Self::AlignViewTop
             | Self::AlignViewBottom
             | Self::AlignViewMiddle
@@ -1314,6 +1358,7 @@ impl EditorCommand {
             | Self::ScrollViewUp => CommandCategory::View,
             Self::ToggleSoftWrap
             | Self::ToggleWhitespace
+            | Self::PreviewDocument
             | Self::ToggleMarkdownRender
             | Self::ToggleZen
             | Self::ToggleFullscreen => CommandCategory::View,
@@ -1398,6 +1443,10 @@ impl EditorCommand {
             | Self::FocusWindowRight
             | Self::NextWindow
             | Self::SwapWindow
+            | Self::MoveWindowLeft
+            | Self::MoveWindowDown
+            | Self::MoveWindowUp
+            | Self::MoveWindowRight
             | Self::CloseWindow
             | Self::OnlyWindow
             | Self::EqualizeWindows => CommandCategory::Window,
@@ -1885,7 +1934,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         Editor::ShowTutorial,
         "tutorial",
         [],
-        "tutorial [reset|sessions]",
+        "tutorial [reset|sessions|next]",
         Optional(FreeText)
     ),
     editor_spec!(
@@ -1963,6 +2012,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         "render",
         ["markdown"],
         "render",
+        NoArguments
+    ),
+    editor_spec!(
+        Editor::PreviewDocument,
+        "preview",
+        [],
+        "preview",
         NoArguments
     ),
     editor_spec!(Editor::ToggleZen, "zen", [], "zen", NoArguments),
@@ -3430,6 +3486,7 @@ fn invocation_from_parts(
                 | EditorCommand::SelectLineUp
                 | EditorCommand::SelectionRedo
                 | EditorCommand::ShowAbout
+                | EditorCommand::PreviewDocument
                 | EditorCommand::ToggleMarkdownRender
                 | EditorCommand::ToggleZen
                 | EditorCommand::ToggleFullscreen,

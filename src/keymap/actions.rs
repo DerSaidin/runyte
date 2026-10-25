@@ -59,6 +59,8 @@ pub fn editor_modes(command: EditorCommand) -> Vec<Mode> {
                     EditorCommand::ExtendLineAbove
                         | EditorCommand::ExtendLineBelow
                         | EditorCommand::SelectLineUp
+                        | EditorCommand::GotoNextParagraph
+                        | EditorCommand::GotoPreviousParagraph
                 ))
         })
         .collect()

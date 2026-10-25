@@ -139,8 +139,9 @@ exceptions include the reduced Dockerfile and PHP injection queries, the
 adapted Ruby locals query, the packaged Protobuf highlight query, and the Zig
 and CMake highlight queries adapted to Runyte's supported predicate set.
 Selected upstream indentation and fold queries are also carried locally, either adopted
-unchanged or reduced to Runyte's bounded `@indent.begin` and
-`@indent.always` dialect. Every copied or adapted file names its exact source
+unchanged or reduced to Runyte's bounded `@indent.begin`,
+`@indent.always`, `@indent.tab`, and `@indent.opener` dialect; captures named
+with a leading underscore serve only the built-in text predicates. Every copied or adapted file names its exact source
 release and retains the applicable SPDX identifier. HCL highlights and the
 remaining structural, indentation, fold, and outline files under `src/syntax/queries/` are
 Runyte-authored MPL-2.0 material and name their target grammar and version

@@ -203,8 +203,10 @@ impl EditorDamageFrame {
             || base.editor.geometry != next.editor.geometry
             || base.editor.theme != next.editor.theme
             || base.editor.terminal_theme_colors != next.editor.terminal_theme_colors
+            || base.editor.preview_theme_colors != next.editor.preview_theme_colors
             || base.editor.mode != next.editor.mode
             || base.editor.session_strip != next.editor.session_strip
+            || base.editor.pane_drop != next.editor.pane_drop
             || base.editor.directory_tree != next.editor.directory_tree
             || base.editor.panes.len() != next.editor.panes.len()
         {
@@ -214,7 +216,8 @@ impl EditorDamageFrame {
         let mut total_rows = 0;
         let mut changed_rows = 0;
         for (old, new) in base.editor.panes.iter().zip(&next.editor.panes) {
-            if old.pane_id != new.pane_id
+            if old.media != new.media
+                || old.pane_id != new.pane_id
                 || old.area != new.area
                 || old.body != new.body
                 || old.active != new.active
@@ -349,8 +352,10 @@ impl TerminalDamageFrame {
             || base.editor.geometry != next.editor.geometry
             || base.editor.theme != next.editor.theme
             || base.editor.terminal_theme_colors != next.editor.terminal_theme_colors
+            || base.editor.preview_theme_colors != next.editor.preview_theme_colors
             || base.editor.mode != next.editor.mode
             || base.editor.session_strip != next.editor.session_strip
+            || base.editor.pane_drop != next.editor.pane_drop
             || base.editor.directory_tree != next.editor.directory_tree
             || base.editor.panes.len() != next.editor.panes.len()
         {
@@ -568,9 +573,11 @@ pub struct EditorSnapshot {
     pub geometry: FrameGeometry,
     pub theme: Theme,
     pub terminal_theme_colors: bool,
+    pub preview_theme_colors: bool,
     pub mode: Mode,
     pub directory_tree: Option<DirectoryTreeSnapshot>,
     pub panes: Vec<PaneSnapshot>,
+    pub pane_drop: Option<Rect>,
     pub status: StatusSnapshot,
     pub session_strip: Option<SessionStripSnapshot>,
 }
@@ -581,9 +588,11 @@ impl From<core::EditorSnapshot> for EditorSnapshot {
             geometry: value.geometry.into(),
             theme: value.theme.into(),
             terminal_theme_colors: value.terminal_theme_colors,
+            preview_theme_colors: value.preview_theme_colors,
             mode: value.mode.into(),
             directory_tree: value.directory_tree.map(Into::into),
             panes: value.panes.into_iter().map(Into::into).collect(),
+            pane_drop: value.pane_drop.map(Into::into),
             status: value.status.into(),
             session_strip: value.session_strip.map(Into::into),
         }
@@ -597,6 +606,7 @@ impl TryFrom<EditorSnapshot> for core::EditorSnapshot {
             geometry: value.geometry.into(),
             theme: value.theme.into(),
             terminal_theme_colors: value.terminal_theme_colors,
+            preview_theme_colors: value.preview_theme_colors,
             mode: value.mode.into(),
             directory_tree: value.directory_tree.map(TryInto::try_into).transpose()?,
             panes: value
@@ -604,6 +614,7 @@ impl TryFrom<EditorSnapshot> for core::EditorSnapshot {
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            pane_drop: value.pane_drop.map(Into::into),
             status: value.status.into(),
             session_strip: value.session_strip.map(TryInto::try_into).transpose()?,
         })
@@ -998,11 +1009,15 @@ mod tests {
             editor: EditorSnapshot {
                 directory_tree: None,
                 session_strip: None,
+                pane_drop: None,
                 geometry: FrameGeometry::default(),
                 theme: theme.into(),
                 terminal_theme_colors: true,
+                preview_theme_colors: true,
                 mode: Mode::Normal,
                 panes: vec![PaneSnapshot {
+                    preview: None,
+                    media: None,
                     pane_id: 1,
                     area: Rect::default(),
                     body: Rect::default(),
@@ -1086,6 +1101,22 @@ mod tests {
         next.editor.theme.terminal[1] = Color::Rgb(1, 2, 3);
         assert!(EditorDamageFrame::between(&base, &next).is_none());
         assert!(TerminalDamageFrame::between(&base, &next).is_none());
+    }
+
+    #[test]
+    fn preview_theme_setting_requires_complete_frames_and_round_trips() {
+        let base = terminal_frame(1, 1, 'x');
+        let mut next = base.clone();
+        next.id = FrameId::from_raw(2);
+        next.editor.preview_theme_colors = false;
+        assert!(EditorDamageFrame::between(&base, &next).is_none());
+        assert!(TerminalDamageFrame::between(&base, &next).is_none());
+        let wire = serde_json::to_vec(&next).unwrap();
+        let decoded: HostFrame = serde_json::from_slice(&wire).unwrap();
+        let core: crate::workspace::HostFrame = decoded.try_into().unwrap();
+        assert!(!core.editor.preview_theme_colors);
+        let wire = HostFrame::from(core);
+        assert!(!wire.editor.preview_theme_colors);
     }
 
     fn path_frame(bytes: Vec<u8>) -> HostFrame {
@@ -1202,6 +1233,24 @@ mod tests {
         let wire = serde_json::to_vec(&next).unwrap();
         let decoded: HostFrame = serde_json::from_slice(&wire).unwrap();
         assert_eq!(decoded.editor.session_strip, next.editor.session_strip);
+    }
+
+    #[test]
+    fn a_moved_pane_drop_preview_requires_a_full_frame() {
+        let base = terminal_frame(1, 1, 'x');
+        let mut next = base.clone();
+        next.id = FrameId::from_raw(2);
+        next.editor.pane_drop = Some(Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        assert!(TerminalDamageFrame::between(&base, &next).is_none());
+        assert!(EditorDamageFrame::between(&base, &next).is_none());
+        let wire = serde_json::to_vec(&next).unwrap();
+        let decoded: HostFrame = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded.editor.pane_drop, next.editor.pane_drop);
     }
 
     #[test]
@@ -1654,8 +1703,69 @@ impl TryFrom<OverlayIdentity> for core::OverlayIdentity {
     }
 }
 
+unit_enum!(
+    MediaAction,
+    crate::media::ViewAction,
+    [
+        ZoomIn,
+        ZoomOut,
+        Fit,
+        ActualSize,
+        Center,
+        PanLeft,
+        PanRight,
+        PanUp,
+        PanDown,
+        MoveUp,
+        MoveDown,
+        CopySelection,
+        Back,
+        SelectAll,
+        BeginSelection,
+        ExtendLeft,
+        ExtendRight,
+        ExtendUp,
+        ExtendDown
+    ]
+);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MediaSnapshot {
+    pub path: Vec<u8>,
+    pub page: usize,
+    pub page_buffer: bool,
+    pub pages: usize,
+}
+impl From<core::MediaSnapshot> for MediaSnapshot {
+    fn from(value: core::MediaSnapshot) -> Self {
+        Self {
+            path: encode_path(&value.path),
+            page: value.page,
+            page_buffer: value.page_buffer,
+            pages: value.pages,
+        }
+    }
+}
+impl TryFrom<MediaSnapshot> for core::MediaSnapshot {
+    type Error = String;
+    fn try_from(value: MediaSnapshot) -> Result<Self, Self::Error> {
+        super::validate_path_bytes(&value.path)?;
+        if !(1..=10_000).contains(&value.pages) || !(1..=value.pages).contains(&value.page) {
+            return Err("invalid media page".into());
+        }
+        Ok(Self {
+            path: decode_path(value.path).map_err(|error| error.to_string())?,
+            page: value.page,
+            page_buffer: value.page_buffer,
+            pages: value.pages,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneSnapshot {
+    pub preview: Option<DocumentPreview>,
+    pub media: Option<MediaSnapshot>,
     pub pane_id: usize,
     pub area: Rect,
     pub body: Rect,
@@ -1802,13 +1912,16 @@ impl From<TerminalCell> for crate::terminal::Cell {
         Self {
             character: value.character,
             combining: {
-                let mut combining = ['\0'; 3];
+                let mut combining = ['\0'; crate::terminal::COMBINING_CAPACITY];
                 for (target, source) in combining.iter_mut().zip(value.combining.iter().copied()) {
                     *target = source;
                 }
                 combining
             },
-            combining_len: value.combining.len().min(3) as u8,
+            combining_len: value
+                .combining
+                .len()
+                .min(crate::terminal::COMBINING_CAPACITY) as u8,
             width: value.width,
             foreground: value.foreground.into(),
             background: value.background.into(),
@@ -1879,6 +1992,8 @@ impl From<TerminalView> for crate::terminal::TerminalView {
 impl From<core::PaneSnapshot> for PaneSnapshot {
     fn from(value: core::PaneSnapshot) -> Self {
         Self {
+            preview: value.preview.map(Into::into),
+            media: value.media.map(Into::into),
             pane_id: value.pane_id,
             area: value.area.into(),
             body: value.body.into(),
@@ -1908,6 +2023,8 @@ impl TryFrom<PaneSnapshot> for core::PaneSnapshot {
     type Error = String;
     fn try_from(value: PaneSnapshot) -> Result<Self, Self::Error> {
         Ok(Self {
+            preview: value.preview.map(TryInto::try_into).transpose()?,
+            media: value.media.map(TryInto::try_into).transpose()?,
             pane_id: value.pane_id,
             area: value.area.into(),
             body: value.body.into(),
@@ -2468,5 +2585,50 @@ impl From<Color> for CoreColor {
             Color::DarkGray => Self::DarkGray,
             Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DocumentPreview {
+    generation: u64,
+    source: usize,
+    selection_only: bool,
+    text: String,
+    language: String,
+    path: Option<Vec<u8>>,
+}
+impl From<crate::document_preview::DocumentPreview> for DocumentPreview {
+    fn from(p: crate::document_preview::DocumentPreview) -> Self {
+        Self {
+            generation: p.generation,
+            source: p.source,
+            selection_only: p.selection_only,
+            text: p.text,
+            language: p.language,
+            path: p.path.map(|p| encode_path(&p)),
+        }
+    }
+}
+impl TryFrom<DocumentPreview> for crate::document_preview::DocumentPreview {
+    type Error = String;
+    fn try_from(p: DocumentPreview) -> Result<Self, String> {
+        if p.text.len() > crate::document_preview::MAX_BYTES || p.language.len() > 64 {
+            return Err("preview capture exceeds limit".into());
+        }
+        let path = p
+            .path
+            .map(|p| {
+                super::validate_path_bytes(&p)?;
+                decode_path(p).map_err(|e| e.to_string())
+            })
+            .transpose()?;
+        Ok(Self {
+            generation: p.generation,
+            source: p.source,
+            selection_only: p.selection_only,
+            text: p.text,
+            language: p.language,
+            path,
+        })
     }
 }

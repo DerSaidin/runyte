@@ -132,8 +132,12 @@ fn ci_enforces_the_committed_dependency_graph() {
             "performance",
             "cargo test --release --locked --test performance -- --ignored --test-threads=1",
         ),
+        (
+            "performance",
+            "cargo test --release --locked --test syntax incremental_reparse_is_far_cheaper_than_a_full_parse -- --ignored --exact --test-threads=1",
+        ),
         ("floor", "cargo build --release --locked"),
-        ("msrv", "cargo +1.88 check --all-targets --locked"),
+        ("msrv", "cargo +1.88 check -p runyte --all-targets --locked"),
     ] {
         let steps = jobs[serde_yaml::Value::from(job)]["steps"]
             .as_sequence()
@@ -200,11 +204,47 @@ fn binary_release_is_tag_bound_native_and_narrowly_privileged() {
         ])
     );
     assert!(source.contains("if test -f src/terminal/pty_windows.rs; then"));
+    assert!(source.contains("if test -f crates/runyte-desktop/Cargo.toml; then"));
+    assert!(source.contains("expected=\"$expected (terminal edition)\""));
     assert!(source.contains(r#"{"target":"x86_64-pc-windows-msvc","runner":"windows-latest"}"#));
 
+    let macos = &workflow["jobs"]["macos-desktop"];
+    assert_eq!(macos["runs-on"], "macos-15");
+    assert!(
+        !workflow["jobs"]["publish"]["needs"]
+            .as_sequence()
+            .unwrap()
+            .contains(&serde_yaml::Value::from("macos-desktop"))
+    );
+    let macos_steps = macos["steps"].as_sequence().unwrap();
+    assert!(
+        macos_steps
+            .iter()
+            .any(|step| step["env"]["MACOSX_DEPLOYMENT_TARGET"] == "11.0")
+    );
+    let artifact = macos_steps.last().unwrap();
+    assert!(
+        !artifact["with"]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("release-")
+    );
+    assert!(
+        artifact["with"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("-unsigned.app.zip")
+    );
+
     assert!(source.contains("cargo build --release --locked --target \"$TARGET\""));
-    assert!(source.contains("runyte-${RELEASE_TAG}-${TARGET}.tar.xz"));
+    assert!(source.contains("${TERMINAL_PREFIX}-${RELEASE_TAG}-${TARGET}.tar.xz"));
     assert!(source.contains("sha256sum runyte-*.tar.xz runyte-*.zip | sort -k2 > SHA256SUMS"));
+    assert!(
+        source
+            .lines()
+            .any(|line| line.trim() == "terminal_prefix=runyte")
+    );
+    assert!(source.contains("terminal_prefix=runyte-terminal"));
     assert!(source.contains("Compress-Archive -LiteralPath $packageDir"));
     // Every archive provides runed beside runyte: a link where the format
     // holds one, a copy in the Windows zip.
@@ -262,6 +302,10 @@ fn editor_help_hides_internal_options_and_uses_workspace_modes() {
     assert!(!help.contains("--project-root"));
     assert!(!help.contains("--detached-host"));
     assert!(!help.contains("--attach"));
+    assert!(!help.contains("--window"));
+    assert!(help.ends_with(
+        "Terminal edition. For the desktop edition, see https://github.com/runyte/runyte#editions\n"
+    ));
     for spelling in [
         "--list-workspaces",
         "--shutdown-workspace",
@@ -313,7 +357,7 @@ fn cwd_file_option_still_works_though_undocumented() {
     // Hiding --cwd-file from --help must not stop it from working: the
     // documented runyte() shell function still passes it on every invocation.
     // --session-list accepts and ignores the option (see the comment above
-    // its handling in src/main.rs), so it exercises the flag end to end
+    // its handling in src/cli.rs), so it exercises the flag end to end
     // without needing a running host.
     //
     // Isolate the process from the real XDG runtime/cache directories, as
@@ -349,4 +393,25 @@ fn documented_shell_wrapper_avoids_zsh_read_only_parameters() {
     assert!(guide.contains("local runyte_tmp runyte_cwd runyte_exit"));
     assert!(!guide.contains("local tmp cwd status"));
     assert!(!guide.contains("status=$?"));
+}
+
+#[test]
+fn terminal_version_and_window_refusal_identify_the_edition() {
+    let root = runyte::test_support::TestRuntimeRoot::new("edition-cli").unwrap();
+    let run = |arg| {
+        Command::new(env!("CARGO_BIN_EXE_runyte"))
+            .arg(arg)
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .output()
+            .unwrap()
+    };
+    let version = run("--version");
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap(),
+        format!("runyte {} (terminal edition)\n", runyte::VERSION)
+    );
+    let window = run("--window");
+    assert!(!window.status.success());
+    assert!(String::from_utf8(window.stderr).unwrap().contains("--window is part of the Runyte desktop edition; this is the terminal edition. See https://github.com/runyte/runyte#editions"));
 }

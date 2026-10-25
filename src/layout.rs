@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+mod expand;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Axis {
     Horizontal,
@@ -33,9 +35,13 @@ const RATIO_SCALE: u16 = u16::MAX;
 const DEFAULT_RATIO: u16 = RATIO_SCALE / 2 + 1;
 const MIN_DRAWABLE_EXTENT: u16 = 3;
 
-/// Which side of a subtree's extent moved while the rest of it stayed still.
+/// One of the two sides of an extent along an axis: left or top for
+/// `Start`, right or bottom for `End`.
+///
+/// Moving a pane names the side it lands on; resizing names the side of a
+/// subtree that moved while the rest of it stayed still.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Edge {
+pub enum Edge {
     Start,
     End,
 }
@@ -78,6 +84,133 @@ impl Layout {
                 (None, None) => None,
             },
         }
+    }
+
+    /// Takes `pane` out of wherever it sits and lays it along one whole side
+    /// of the layout, spanning everything else across `axis`.
+    ///
+    /// Everything left behind keeps its shape and its proportions; only the
+    /// new outermost boundary is placed, by the same slot count equalizing
+    /// uses, so the moved pane is as wide (or tall) as one level column of
+    /// what it now sits beside. Returns false, leaving the layout untouched,
+    /// when the pane is absent, alone, or already lies along that side.
+    pub fn move_to_edge(&mut self, pane: usize, axis: Axis, edge: Edge) -> bool {
+        if !self.contains(pane) || self.spans_edge(pane, axis, edge) {
+            return false;
+        }
+        let Some(rest) = self.clone().without(pane) else {
+            return false;
+        };
+        let rest_slots = rest.slots(axis);
+        let (first, second, ratio) = match edge {
+            Edge::Start => (Self::Pane(pane), rest, ratio_for_equal_slots(1, rest_slots)),
+            Edge::End => (rest, Self::Pane(pane), ratio_for_equal_slots(rest_slots, 1)),
+        };
+        let moved = Self::Split {
+            axis,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        self.replace_if_reshaped(moved)
+    }
+
+    /// A chain of splits along this axis can expose a pane at the whole edge
+    /// without placing it directly beneath the root of the tree.
+    fn spans_edge(&self, pane: usize, axis: Axis, edge: Edge) -> bool {
+        match self {
+            Self::Pane(id) => *id == pane,
+            Self::Split {
+                axis: split_axis,
+                first,
+                second,
+                ..
+            } if *split_axis == axis => match edge {
+                Edge::Start => first.spans_edge(pane, axis, edge),
+                Edge::End => second.spans_edge(pane, axis, edge),
+            },
+            _ => false,
+        }
+    }
+
+    /// Takes `pane` out of wherever it sits and splits `target` in two, with
+    /// `pane` on its `edge` side along `axis`.
+    ///
+    /// This is the split a new pane would get, so the two share the target's
+    /// old area evenly. Returns false, leaving the layout untouched, when
+    /// either pane is absent, they are the same pane, or `pane` already sits
+    /// there.
+    pub fn move_beside(&mut self, pane: usize, target: usize, axis: Axis, edge: Edge) -> bool {
+        if pane == target || !self.contains(pane) || !self.contains(target) {
+            return false;
+        }
+        let Some(mut moved) = self.clone().without(pane) else {
+            return false;
+        };
+        if !moved.split(target, pane, axis) {
+            return false;
+        }
+        if edge == Edge::Start {
+            moved.swap_children_of(target, pane);
+        }
+        self.replace_if_reshaped(moved)
+    }
+
+    /// Installs `moved` unless it arranges the panes exactly as they already
+    /// are, so a move that changes nothing also leaves every ratio alone.
+    fn replace_if_reshaped(&mut self, moved: Self) -> bool {
+        if self.same_shape(&moved) {
+            return false;
+        }
+        *self = moved;
+        true
+    }
+
+    /// Whether two trees place the same panes in the same splits, whatever
+    /// their ratios.
+    fn same_shape(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Pane(left), Self::Pane(right)) => left == right,
+            (
+                Self::Split {
+                    axis: left_axis,
+                    first: left_first,
+                    second: left_second,
+                    ..
+                },
+                Self::Split {
+                    axis: right_axis,
+                    first: right_first,
+                    second: right_second,
+                    ..
+                },
+            ) => {
+                left_axis == right_axis
+                    && left_first.same_shape(right_first)
+                    && left_second.same_shape(right_second)
+            }
+            _ => false,
+        }
+    }
+
+    /// Reverses the split whose children are exactly the panes `first` and
+    /// `second`, in that order.
+    fn swap_children_of(&mut self, first: usize, second: usize) {
+        let Self::Split {
+            first: left,
+            second: right,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if matches!((&**left, &**right), (Self::Pane(a), Self::Pane(b)) if *a == first && *b == second)
+        {
+            std::mem::swap(left, right);
+            return;
+        }
+        left.swap_children_of(first, second);
+        right.swap_children_of(first, second);
     }
 
     pub fn panes(&self, output: &mut Vec<usize>) {
@@ -702,6 +835,164 @@ mod tests {
         assert!(areas[&0].width >= 3);
         assert!(areas[&2].width >= 3);
         assert_eq!(areas[&1].width, 3);
+    }
+
+    fn areas_of(layout: &Layout, width: u16, height: u16) -> HashMap<usize, Rect> {
+        let mut areas = HashMap::new();
+        layout.rectangles(
+            Rect {
+                width,
+                height,
+                ..Rect::default()
+            },
+            &mut areas,
+        );
+        areas
+    }
+
+    /// One pane across the top and two side by side beneath it.
+    fn wide_top_over_two_columns() -> Layout {
+        let mut layout = Layout::Pane(0);
+        assert!(layout.split(0, 1, Axis::Vertical));
+        assert!(layout.split(1, 2, Axis::Horizontal));
+        layout
+    }
+
+    #[test]
+    fn moving_a_lower_pane_to_the_left_edge_spans_the_full_height() {
+        let mut layout = wide_top_over_two_columns();
+        assert!(layout.move_to_edge(1, Axis::Horizontal, Edge::Start));
+
+        let areas = areas_of(&layout, 100, 40);
+        assert_eq!(
+            areas[&1],
+            Rect {
+                x: 0,
+                y: 0,
+                width: 50,
+                height: 40
+            }
+        );
+        // What was left behind keeps its own stacking beside the moved pane.
+        assert_eq!((areas[&0].x, areas[&0].y, areas[&0].height), (50, 0, 20));
+        assert_eq!((areas[&2].x, areas[&2].y, areas[&2].height), (50, 20, 20));
+    }
+
+    #[test]
+    fn moving_to_an_edge_beside_two_columns_takes_a_level_third() {
+        let mut layout = wide_top_over_two_columns();
+        assert!(layout.move_to_edge(0, Axis::Horizontal, Edge::End));
+
+        let areas = areas_of(&layout, 90, 30);
+        for pane in [1, 2, 0] {
+            assert_eq!(areas[&pane].width, 30, "pane {pane}");
+            assert_eq!(areas[&pane].height, 30, "pane {pane}");
+        }
+        assert_eq!(areas[&0].x, 60);
+    }
+
+    #[test]
+    fn moving_to_the_bottom_edge_spans_the_full_width() {
+        let mut layout = Layout::Pane(0);
+        assert!(layout.split(0, 1, Axis::Horizontal));
+        assert!(layout.split(1, 2, Axis::Horizontal));
+        assert!(layout.move_to_edge(1, Axis::Vertical, Edge::End));
+
+        let areas = areas_of(&layout, 80, 40);
+        assert_eq!(
+            areas[&1],
+            Rect {
+                x: 0,
+                y: 20,
+                width: 80,
+                height: 20
+            }
+        );
+        assert_eq!((areas[&0].width, areas[&2].width), (40, 40));
+    }
+
+    #[test]
+    fn moving_a_pane_already_along_that_edge_keeps_every_ratio() {
+        let mut layout = wide_top_over_two_columns();
+        assert!(layout.move_to_edge(1, Axis::Horizontal, Edge::Start));
+        let area = Rect {
+            width: 100,
+            height: 40,
+            ..Rect::default()
+        };
+        assert!(layout.resize_between_cells(1, 0, area, 10));
+        let before = areas_of(&layout, 100, 40);
+
+        assert!(!layout.move_to_edge(1, Axis::Horizontal, Edge::Start));
+        assert_eq!(areas_of(&layout, 100, 40), before);
+    }
+
+    #[test]
+    fn moving_an_edge_pane_in_nested_parallel_splits_preserves_ratios() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            for edge in [Edge::Start, Edge::End] {
+                let mut layout = Layout::Pane(0);
+                assert!(layout.split(0, 1, axis));
+                assert!(layout.split(0, 2, axis));
+                assert!(layout.split(1, 3, axis));
+                let pane = if edge == Edge::Start { 0 } else { 3 };
+                let before = areas_of(&layout, 120, 60);
+                assert!(!layout.move_to_edge(pane, axis, edge));
+                assert_eq!(areas_of(&layout, 120, 60), before);
+            }
+        }
+    }
+
+    #[test]
+    fn moving_a_lone_or_absent_pane_to_an_edge_is_refused() {
+        let mut layout = Layout::Pane(0);
+        assert!(!layout.move_to_edge(0, Axis::Horizontal, Edge::Start));
+        assert!(matches!(layout, Layout::Pane(0)));
+
+        let mut layout = wide_top_over_two_columns();
+        assert!(!layout.move_to_edge(7, Axis::Vertical, Edge::End));
+        assert!(layout.same_shape(&wide_top_over_two_columns()));
+    }
+
+    #[test]
+    fn moving_beside_a_pane_splits_that_pane_on_the_named_side() {
+        let mut layout = wide_top_over_two_columns();
+        assert!(layout.move_beside(0, 2, Axis::Vertical, Edge::End));
+        let areas = areas_of(&layout, 100, 40);
+        assert_eq!((areas[&1].x, areas[&1].height), (0, 40));
+        assert_eq!((areas[&2].x, areas[&2].y, areas[&2].height), (50, 0, 20));
+        assert_eq!((areas[&0].x, areas[&0].y, areas[&0].height), (50, 20, 20));
+
+        let mut layout = wide_top_over_two_columns();
+        assert!(layout.move_beside(0, 1, Axis::Horizontal, Edge::Start));
+        let areas = areas_of(&layout, 100, 40);
+        assert_eq!((areas[&0].x, areas[&0].width), (0, 25));
+        assert_eq!((areas[&1].x, areas[&1].width), (25, 25));
+        assert_eq!((areas[&2].x, areas[&2].width), (50, 50));
+        for pane in [0, 1, 2] {
+            assert_eq!(areas[&pane].height, 40, "pane {pane}");
+        }
+    }
+
+    #[test]
+    fn moving_beside_itself_or_where_it_already_sits_is_refused() {
+        let mut layout = Layout::Pane(0);
+        assert!(layout.split(0, 1, Axis::Horizontal));
+        let area = Rect {
+            width: 100,
+            height: 10,
+            ..Rect::default()
+        };
+        assert!(layout.resize_between_cells(0, 1, area, 15));
+        let before = areas_of(&layout, 100, 10);
+
+        assert!(!layout.move_beside(1, 1, Axis::Horizontal, Edge::Start));
+        assert!(!layout.move_beside(1, 0, Axis::Horizontal, Edge::End));
+        assert!(!layout.move_beside(1, 9, Axis::Horizontal, Edge::End));
+        assert_eq!(areas_of(&layout, 100, 10), before);
+
+        assert!(layout.move_beside(1, 0, Axis::Horizontal, Edge::Start));
+        assert_eq!(areas_of(&layout, 100, 10)[&1].x, 0);
     }
 
     #[test]

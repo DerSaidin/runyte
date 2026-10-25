@@ -518,13 +518,13 @@ fn fit_row(spans: Vec<Span<'static>>, width: usize, ground: Option<Style>) -> Li
             continue;
         }
         let mut content = String::new();
-        for character in span.content.chars() {
-            let cells = character.width().unwrap_or(0);
+        for cluster in span.content.graphemes(true) {
+            let cells = crate::grapheme::width(cluster);
             if used + cells > width {
                 break;
             }
             used += cells;
-            content.push(character);
+            content.push_str(cluster);
         }
         if !content.is_empty() {
             fitted.push(Span::styled(content, span.style));
@@ -609,11 +609,18 @@ fn elided_label(
 ) -> Vec<(Option<usize>, char)> {
     let characters = label.chars().enumerate().map(|(index, c)| (Some(index), c));
     let whole = || characters.clone().collect::<Vec<_>>();
-    let width = |run: &[(Option<usize>, char)]| {
-        run.iter()
-            .map(|(_, character)| character.width().unwrap_or(0))
-            .sum::<usize>()
+    // Each character's width sits on its first code point, and only a
+    // character's first code point may start or end what is kept, so an
+    // ellipsis never cuts an emoji sequence apart.
+    let cells = crate::grapheme::starts(label.chars())
+        .map(|(_, width)| width)
+        .collect::<Vec<_>>();
+    let cells_of = |item: &(Option<usize>, char)| match item.0 {
+        Some(index) => cells[index].unwrap_or(0),
+        None => item.1.width().unwrap_or(0),
     };
+    let starts = |item: &(Option<usize>, char)| item.0.is_none_or(|index| cells[index].is_some());
+    let width = |run: &[(Option<usize>, char)]| run.iter().map(cells_of).sum::<usize>();
     let all = whole();
     let Some(from) = elide_from.filter(|from| *from < all.len()) else {
         return all;
@@ -654,29 +661,57 @@ fn elided_label(
     let mut tail_start = name.len();
     let mut tail_width = 0;
     while tail_start > 0 {
-        let next = name[tail_start - 1].1.width().unwrap_or(0);
+        let mut start = tail_start - 1;
+        while start > 0 && !starts(&name[start]) {
+            start -= 1;
+        }
+        let next = width(&name[start..tail_start]);
         if tail_width + next > tail_room {
             break;
         }
         tail_width += next;
-        tail_start -= 1;
+        tail_start = start;
     }
     let head_room = room - 1 - tail_width;
     let mut front_end = 0;
     let mut front_width = 0;
     while front_end < tail_start {
-        let next = name[front_end].1.width().unwrap_or(0);
+        let mut end = front_end + 1;
+        while end < tail_start && !starts(&name[end]) {
+            end += 1;
+        }
+        let next = width(&name[front_end..end]);
         if front_width + next > head_room {
             break;
         }
         front_width += next;
-        front_end += 1;
+        front_end = end;
     }
     let mut kept = head.to_vec();
     kept.extend_from_slice(&name[..front_end]);
     kept.push((None, '…'));
     kept.extend_from_slice(&name[tail_start..]);
     fill(kept)
+}
+
+/// Spans built one per code point, merged wherever a code point continues the
+/// character the previous span ends with: a frontend measures and places each
+/// span on its own, so half an emoji sequence per span would be drawn as two.
+/// The merged span keeps the style of the character's first code point.
+fn join_clusters(spans: impl IntoIterator<Item = Span<'static>>) -> Vec<Span<'static>> {
+    let mut joined: Vec<Span<'static>> = Vec::new();
+    for span in spans {
+        if let Some(previous) = joined.last_mut()
+            && let Some(first) = span.content.chars().next()
+            && let Some(last) = previous.content.graphemes(true).next_back()
+            && crate::grapheme::extends(&mut last.to_owned(), first)
+        {
+            previous.content.to_mut().push_str(&span.content);
+            continue;
+        }
+        joined.push(span);
+    }
+    joined
 }
 
 /// The tint covering character `position` of a row's label, or of its
@@ -854,6 +889,7 @@ fn render_editor_frame(
     for pane in &snapshot.panes {
         draw_pane(frame, &app.theme, snapshot.mode, pane);
     }
+    draw_pane_drop(frame, &app.theme, snapshot.pane_drop);
     if let Some(tree) = &snapshot.directory_tree {
         place_directory_tree_cursor(frame, tree);
     }
@@ -1032,11 +1068,8 @@ fn draw_setting_prompt(frame: &mut Frame<'_>, app: &TuiApp<'_>, editor_area: Rec
             ),
         );
     }
-    let cells = app
-        .command
-        .chars()
-        .take(app.command_cursor)
-        .map(|character| character.width().unwrap_or(0))
+    let cells = crate::grapheme::cells(app.command.chars().take(app.command_cursor))
+        .map(|(_, cells)| cells)
         .sum::<usize>();
     let x = inner
         .x
@@ -1053,19 +1086,115 @@ pub fn render_host_frame(
     snapshot: &HostFrame,
     color_depth: TerminalColorDepth,
 ) {
-    render_attached_frame(frame, snapshot, color_depth);
+    render_attached_frame(frame, snapshot, SessionMode::Persistent, color_depth);
 }
 
 /// Preserves a transport-owned frame's exact RGB for presentation-oriented
 /// test backends.
 #[doc(hidden)]
 pub fn render_host_frame_exact_colors_for_test(frame: &mut Frame<'_>, snapshot: &HostFrame) {
-    render_attached_frame(frame, snapshot, TerminalColorDepth::TrueColor);
+    render_attached_frame(
+        frame,
+        snapshot,
+        SessionMode::Persistent,
+        TerminalColorDepth::TrueColor,
+    );
+}
+
+/// The theme's default background and foreground as the native window paints
+/// them: margins, `Reset` cell colours and media fills. A terminal leaves
+/// these to the emulator's own defaults; a window has no such defaults, so a
+/// `reset` theme colour becomes one that contrasts with the colour the theme
+/// does define.
+pub fn native_default_colors(
+    theme: &crate::config::Theme,
+) -> (ratatui::style::Color, ratatui::style::Color) {
+    use ratatui::style::Color as TuiColor;
+    // Black and white text contrast equally with a luminance of about 0.179.
+    const CONTRAST_MIDPOINT: f64 = 0.179;
+    let light = match (
+        theme.background.relative_luminance(),
+        theme.foreground.relative_luminance(),
+    ) {
+        (Some(background), _) => background >= CONTRAST_MIDPOINT,
+        (None, Some(foreground)) => foreground < CONTRAST_MIDPOINT,
+        (None, None) => false,
+    };
+    let background = match theme.background {
+        RunyteColor::Reset if light => TuiColor::Rgb(0xf8, 0xf8, 0xf8),
+        RunyteColor::Reset => TuiColor::Rgb(0x18, 0x18, 0x18),
+        color => to_tui_color_for(color, TerminalColorDepth::TrueColor),
+    };
+    let foreground = match theme.foreground {
+        RunyteColor::Reset if light => TuiColor::Rgb(0x20, 0x20, 0x20),
+        RunyteColor::Reset => TuiColor::Rgb(0xdd, 0xdd, 0xdd),
+        color => to_tui_color_for(color, TerminalColorDepth::TrueColor),
+    };
+    (background, foreground)
+}
+
+#[cfg(test)]
+#[test]
+fn native_default_colors_contrast_with_the_defined_theme_colour() {
+    use ratatui::style::Color as TuiColor;
+    let mut theme = Theme::try_from(&crate::config::ThemeDefinition::default()).unwrap();
+    theme.background = RunyteColor::Rgb(0x0b, 0x1f, 0x2a);
+    theme.foreground = RunyteColor::Rgb(0xe0, 0xe0, 0xe0);
+    assert_eq!(
+        native_default_colors(&theme),
+        (
+            TuiColor::Rgb(0x0b, 0x1f, 0x2a),
+            TuiColor::Rgb(0xe0, 0xe0, 0xe0)
+        )
+    );
+    // A terminal-default background under dark text becomes a light window.
+    theme.background = RunyteColor::Reset;
+    theme.foreground = RunyteColor::Rgb(0x10, 0x10, 0x10);
+    assert_eq!(
+        native_default_colors(&theme),
+        (
+            TuiColor::Rgb(0xf8, 0xf8, 0xf8),
+            TuiColor::Rgb(0x10, 0x10, 0x10)
+        )
+    );
+    theme.foreground = RunyteColor::Reset;
+    assert_eq!(
+        native_default_colors(&theme),
+        (
+            TuiColor::Rgb(0x18, 0x18, 0x18),
+            TuiColor::Rgb(0xdd, 0xdd, 0xdd)
+        )
+    );
+    // A mid-grey background still takes dark default text.
+    theme.background = RunyteColor::Rgb(0xa0, 0xa0, 0xa0);
+    assert_eq!(
+        native_default_colors(&theme).1,
+        TuiColor::Rgb(0x20, 0x20, 0x20)
+    );
+    // A reset background under mid-grey text becomes a dark window.
+    theme.background = RunyteColor::Reset;
+    theme.foreground = RunyteColor::Rgb(0x99, 0x99, 0x99);
+    assert_eq!(
+        native_default_colors(&theme).0,
+        TuiColor::Rgb(0x18, 0x18, 0x18)
+    );
+}
+
+/// Renders the standalone native window through the same snapshot geometry
+/// used to composite its overlays above media.
+pub fn render_native_frame(
+    frame: &mut Frame<'_>,
+    snapshot: &HostFrame,
+    session: SessionMode,
+    color_depth: TerminalColorDepth,
+) {
+    render_attached_frame(frame, snapshot, session, color_depth);
 }
 
 fn render_attached_frame(
     frame: &mut Frame<'_>,
     snapshot: &HostFrame,
+    session: SessionMode,
     color_depth: TerminalColorDepth,
 ) {
     let mut theme = TuiTheme::with_color_depth(&snapshot.editor.theme, color_depth);
@@ -1077,6 +1206,7 @@ fn render_attached_frame(
     for pane in &snapshot.editor.panes {
         draw_pane(frame, &theme, snapshot.editor.mode, pane);
     }
+    draw_pane_drop(frame, &theme, snapshot.editor.pane_drop);
     if let Some(tree) = &snapshot.editor.directory_tree {
         place_directory_tree_cursor(frame, tree);
     }
@@ -1084,7 +1214,7 @@ fn render_attached_frame(
         frame,
         &theme,
         &snapshot.editor.status,
-        SessionMode::Persistent,
+        session,
         to_tui_rect(snapshot.editor.geometry.status),
         to_tui_rect(snapshot.editor.geometry.message),
     );
@@ -1129,38 +1259,72 @@ fn render_attached_frame(
     );
 }
 
-fn draw_snapshot_overlay(
-    frame: &mut Frame<'_>,
-    theme: &TuiTheme,
-    overlay: &OverlaySnapshot,
-    editor: &EditorSnapshot,
-) {
+/// Cell rectangles painted by the snapshot renderer's visible overlays.
+/// Native frontends can composite these cells above media without revealing
+/// the editor cells beneath the rest of the image.
+pub fn overlay_rectangles(editor: &EditorSnapshot, overlays: &[OverlaySnapshot]) -> Vec<Rect> {
+    let completion_visible = overlays
+        .iter()
+        .any(|overlay| overlay.kind == OverlayKind::Completion);
+    let mut areas: Vec<_> = overlays
+        .iter()
+        .filter(|overlay| overlay.kind != OverlayKind::Signature || !completion_visible)
+        .filter_map(|overlay| snapshot_overlay_area(editor, overlay).map(from_tui_rect))
+        .collect();
+    if let Some(area) = editor.pane_drop {
+        let area = to_tui_rect(area).intersection(to_tui_rect(editor.geometry.screen));
+        if area.width >= 2 && area.height >= 2 {
+            // Native media hides grid cells beneath its body. Reveal just the
+            // outline, preserving the image or document inside the drop area.
+            areas.extend([
+                from_tui_rect(TuiRect::new(area.x, area.y, area.width, 1)),
+                from_tui_rect(TuiRect::new(area.x, area.bottom() - 1, area.width, 1)),
+                from_tui_rect(TuiRect::new(area.x, area.y, 1, area.height)),
+                from_tui_rect(TuiRect::new(area.right() - 1, area.y, 1, area.height)),
+            ]);
+        }
+    }
+    areas
+}
+
+fn snapshot_overlay_area(editor: &EditorSnapshot, overlay: &OverlaySnapshot) -> Option<TuiRect> {
     let editor_area = editor.geometry.editor;
     if editor_area.width < 3 || editor_area.height < 3 {
-        return;
+        return None;
     }
     if overlay.layout == OverlayLayout::GitMergeReview {
-        draw_merge_review(frame, theme, overlay, editor_area);
-        return;
+        return Some(to_tui_rect(
+            crate::merge_review_layout::merge_review_layout(
+                editor_area,
+                overlay.message.as_deref().unwrap_or_default(),
+                overlay.input == crate::snapshot::OverlayInput::Text,
+            )
+            .area,
+        ));
     }
     if overlay.kind == OverlayKind::KeyHints {
-        draw_snapshot_key_hints(frame, theme, overlay, editor_area);
-        return;
+        let height = if overlay.message.is_some() {
+            3.min(editor_area.height)
+        } else if overlay.rows.is_empty() {
+            return None;
+        } else {
+            snapshot_key_hint_layout(overlay, editor_area).height
+        };
+        return Some(TuiRect::new(
+            editor_area.x,
+            editor_area.y + editor_area.height.saturating_sub(height),
+            editor_area.width,
+            height,
+        ));
     }
-    // A surface that owns its input keeps its query line whether or not
-    // anything has been typed into it, so its rows never move under the
-    // reader as the first character arrives. A surface that owns no input —
-    // key hints showing a pending stroke, a completion showing its filter —
-    // still shows the text it has, and shows nothing when it has none.
-    let shows_query =
-        overlay.input != crate::snapshot::OverlayInput::None || !overlay.query.is_empty();
-    let query_height = usize::from(shows_query);
-    let header_height = usize::from(overlay.column_header.is_some());
+    let query_height = usize::from(
+        overlay.input != crate::snapshot::OverlayInput::None || !overlay.query.is_empty(),
+    );
     let message_height = overlay
         .message
         .as_deref()
         .map_or(0, |message| message.lines().count());
-    let area = if overlay.layout == OverlayLayout::Setting {
+    Some(if overlay.layout == OverlayLayout::Setting {
         to_tui_rect(setting_popup_area(editor_area))
     } else if overlay.layout == OverlayLayout::SettingChoice {
         to_tui_rect(setting_choice_popup_area(editor_area))
@@ -1177,15 +1341,6 @@ fn draw_snapshot_overlay(
             }
             OverlayKind::FilePicker => to_tui_rect(centered(editor_area, 90, 85, 28, 8)),
             OverlayKind::BufferActions => to_tui_rect(action_menu_area(editor_area, overlay)),
-            OverlayKind::KeyHints => {
-                let height = (overlay.rows.len() as u16 + 3).clamp(3, editor_area.height.min(16));
-                to_tui_rect(Rect {
-                    x: editor_area.x,
-                    y: editor_area.y + editor_area.height.saturating_sub(height),
-                    width: editor_area.width,
-                    height,
-                })
-            }
             // Assistance attached to the interaction line: bottom left,
             // sized to the rows it holds and to the width they need, so the
             // same hints occupy the same corner in both renderers.
@@ -1207,7 +1362,36 @@ fn draw_snapshot_overlay(
             }
             _ => to_tui_rect(centered(editor_area, 80, 75, 28, 7)),
         }
+    })
+}
+
+fn draw_snapshot_overlay(
+    frame: &mut Frame<'_>,
+    theme: &TuiTheme,
+    overlay: &OverlaySnapshot,
+    editor: &EditorSnapshot,
+) {
+    let editor_area = editor.geometry.editor;
+    let Some(area) = snapshot_overlay_area(editor, overlay) else {
+        return;
     };
+    if overlay.layout == OverlayLayout::GitMergeReview {
+        draw_merge_review(frame, theme, overlay, editor_area);
+        return;
+    }
+    if overlay.kind == OverlayKind::KeyHints {
+        draw_snapshot_key_hints(frame, theme, overlay, editor_area, area);
+        return;
+    }
+    // A surface that owns its input keeps its query line whether or not
+    // anything has been typed into it, so its rows never move under the
+    // reader as the first character arrives. A surface that owns no input —
+    // key hints showing a pending stroke, a completion showing its filter —
+    // still shows the text it has, and shows nothing when it has none.
+    let shows_query =
+        overlay.input != crate::snapshot::OverlayInput::None || !overlay.query.is_empty();
+    let query_height = usize::from(shows_query);
+    let header_height = usize::from(overlay.column_header.is_some());
     let content_width = area.width.saturating_sub(2);
     let message_width = if overlay.layout == OverlayLayout::Preview
         && overlay.show_preview
@@ -1301,12 +1485,14 @@ fn draw_snapshot_overlay(
     } else {
         (
             overlay.query.clone(),
-            overlay
-                .query
-                .chars()
-                .take(overlay.query_cursor.unwrap_or(0))
-                .map(|character| character.width().unwrap_or(0))
-                .sum(),
+            crate::grapheme::cells(
+                overlay
+                    .query
+                    .chars()
+                    .take(overlay.query_cursor.unwrap_or(0)),
+            )
+            .map(|(_, cells)| cells)
+            .sum(),
         )
     };
     let mut query_height = 0;
@@ -1439,7 +1625,7 @@ fn draw_snapshot_overlay(
                 .filter(|text| !text.is_empty())
                 .map(|text| text.width() + 2)
                 .sum::<usize>();
-        spans.extend(
+        spans.extend(join_clusters(
             elided_label(
                 &row.label,
                 row.elide_from,
@@ -1461,7 +1647,7 @@ fn draw_snapshot_overlay(
                 }
                 Span::styled(character.to_string(), character_style)
             }),
-        );
+        ));
         let mut detail_style = ground.fg(if row.dimmed && !selected {
             theme.jump_text_muted
         } else {
@@ -1477,14 +1663,16 @@ fn draw_snapshot_overlay(
                 .iter()
                 .copied()
                 .collect::<std::collections::HashSet<_>>();
-            spans.extend(row.detail.chars().enumerate().map(|(position, character)| {
-                let style = if detail_emphasized.contains(&position) {
-                    detail_style.fg(emphasis_color).bold()
-                } else {
-                    detail_style
-                };
-                Span::styled(character.to_string(), style)
-            }));
+            spans.extend(join_clusters(row.detail.chars().enumerate().map(
+                |(position, character)| {
+                    let style = if detail_emphasized.contains(&position) {
+                        detail_style.fg(emphasis_color).bold()
+                    } else {
+                        detail_style
+                    };
+                    Span::styled(character.to_string(), style)
+                },
+            )));
         }
         let trailing = tinted_trailing(
             &row.trailing_detail,
@@ -1809,21 +1997,41 @@ fn draw_choice_explanation(
     );
 }
 
-/// Draws the presentation-neutral hint rows carried by an attached frame with
-/// the same responsive grid as the standalone frontend.
+/// The responsive grid shared by overlay compositing and hint painting.
+fn snapshot_key_hint_layout(
+    overlay: &OverlaySnapshot,
+    editor_area: Rect,
+) -> crate::key_hints::KeyHintLayout {
+    let widest_key = overlay
+        .rows
+        .iter()
+        .map(|row| UnicodeWidthStr::width(row.label.as_str()))
+        .max()
+        .unwrap_or_default();
+    let widest_description = overlay
+        .rows
+        .iter()
+        .map(|row| UnicodeWidthStr::width(row.detail.as_str()))
+        .max()
+        .unwrap_or_default();
+    key_hint_layout(
+        editor_area.width,
+        editor_area.height,
+        overlay.total_rows,
+        widest_key,
+        widest_description,
+        overlay.scroll_anchor.unwrap_or(overlay.row_offset),
+    )
+}
+
 fn draw_snapshot_key_hints(
     frame: &mut Frame<'_>,
     theme: &TuiTheme,
     overlay: &OverlaySnapshot,
     editor_area: Rect,
+    area: TuiRect,
 ) {
     if let Some(message) = &overlay.message {
-        let area = TuiRect::new(
-            editor_area.x,
-            editor_area.y + editor_area.height.saturating_sub(3),
-            editor_area.width,
-            3.min(editor_area.height),
-        );
         let popup = Paragraph::new(message.clone())
             .block(
                 Block::default()
@@ -1844,32 +2052,7 @@ fn draw_snapshot_key_hints(
         return;
     }
 
-    let widest_key = overlay
-        .rows
-        .iter()
-        .map(|row| UnicodeWidthStr::width(row.label.as_str()))
-        .max()
-        .unwrap_or_default();
-    let widest_description = overlay
-        .rows
-        .iter()
-        .map(|row| UnicodeWidthStr::width(row.detail.as_str()))
-        .max()
-        .unwrap_or_default();
-    let layout = key_hint_layout(
-        editor_area.width,
-        editor_area.height,
-        overlay.total_rows,
-        widest_key,
-        widest_description,
-        overlay.scroll_anchor.unwrap_or(overlay.row_offset),
-    );
-    let area = TuiRect::new(
-        editor_area.x,
-        editor_area.y + editor_area.height.saturating_sub(layout.height),
-        editor_area.width,
-        layout.height,
-    );
+    let layout = snapshot_key_hint_layout(overlay, editor_area);
     let range = if overlay.total_rows > layout.visible_rows {
         let controls = overlay
             .actions
@@ -2300,6 +2483,28 @@ fn place_directory_tree_cursor(frame: &mut Frame<'_>, tree: &DirectoryTreeSnapsh
     }
 }
 
+/// Outlines where an Alt-dragged pane would land, over whatever it would
+/// displace. Only the border is drawn, so the text underneath stays legible,
+/// and it is thick so it never reads as the active pane's own plain border.
+fn draw_pane_drop(frame: &mut Frame<'_>, theme: &TuiTheme, area: Option<crate::layout::Rect>) {
+    let Some(area) = area else {
+        return;
+    };
+    let area = to_tui_rect(area).intersection(frame.area());
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let outline = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .border_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_widget(outline, area);
+}
+
 fn draw_pane(frame: &mut Frame<'_>, theme: &TuiTheme, mode: Mode, pane: &PaneSnapshot) {
     if !pane.drawable {
         return;
@@ -2332,6 +2537,16 @@ fn draw_pane(frame: &mut Frame<'_>, theme: &TuiTheme, mode: Mode, pane: &PaneSna
         return;
     }
 
+    if pane.media.as_ref().is_some_and(|media| !media.page_buffer) {
+        frame.render_widget(
+            Paragraph::new(crate::cli::edition::MEDIA_WINDOW)
+                .wrap(Wrap { trim: true })
+                .style(Style::default().fg(theme.muted).bg(background)),
+            body,
+        );
+        return;
+    }
+
     let lines = pane
         .rows
         .iter()
@@ -2361,6 +2576,9 @@ fn draw_terminal(
     terminal: &TerminalView,
     body: TuiRect,
 ) {
+    // A retained host frame can outlive the client's previous window size.
+    // Use the same clipped geometry for Paragraph and direct spacer styling.
+    let body = body.intersection(frame.area());
     let background = theme.pane_background(active);
     let lines = terminal
         .rows
@@ -2372,6 +2590,29 @@ fn draw_terminal(
         Paragraph::new(lines).style(Style::default().fg(theme.foreground).bg(background)),
         body,
     );
+    // Paragraph resets a wide glyph's spacer. Terminal backends paint the
+    // whole glyph with its lead style, but the native frontend paints cell
+    // backgrounds individually. Preserve that same style on both columns.
+    let buffer = frame.buffer_mut();
+    for (row, cells) in terminal
+        .rows
+        .iter()
+        .take(usize::from(body.height))
+        .enumerate()
+    {
+        for (column, cell) in cells
+            .iter()
+            .take(usize::from(body.width.saturating_sub(1)))
+            .enumerate()
+        {
+            if cell.width == 2 {
+                let x = body.x + column as u16;
+                let y = body.y + row as u16;
+                let style = buffer[(x, y)].style();
+                buffer[(x + 1, y)].set_style(style);
+            }
+        }
+    }
 }
 
 fn terminal_line(
@@ -2422,7 +2663,9 @@ fn terminal_line(
                     .bg(background),
             };
         }
-        if cursor == Some(column) {
+        if cursor
+            .is_some_and(|cursor| cursor >= column && cursor < column + usize::from(cell.width))
+        {
             style = if active {
                 // Like an editor caret, the active terminal caret follows the
                 // current NOR/INS/SEL colour. Rebuild the style so a child's
@@ -2432,7 +2675,7 @@ fn terminal_line(
                 style.add_modifier(Modifier::UNDERLINED)
             };
         }
-        spans.push(Span::styled(cell.text(), style));
+        spans.push(Span::styled(cell.display_text(), style));
     }
     Line::from(spans)
 }
@@ -2917,7 +3160,7 @@ fn severity_color(
 /// over the transport. Carrying it in the snapshot instead would put a
 /// question the host cannot answer about itself onto the wire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SessionMode {
+pub enum SessionMode {
     /// The TUI and the workspace host are this one process.
     Standalone,
     /// This TUI is attached to a workspace host running elsewhere.
@@ -3160,7 +3403,22 @@ fn pane_title_text(
         + UnicodeWidthStr::width(read_only_marker)
         + UnicodeWidthStr::width(maximized_marker);
     let name_width = pane_width.saturating_sub(fixed_width);
-    let name = clip_path_start(name, name_width);
+    let name = ["[pdf] ", "[image] "]
+        .into_iter()
+        .find_map(|prefix| {
+            name.strip_prefix(prefix).map(|path| {
+                let prefix_width = UnicodeWidthStr::width(prefix);
+                if name_width >= prefix_width {
+                    format!(
+                        "{prefix}{}",
+                        clip_path_start(path, name_width - prefix_width)
+                    )
+                } else {
+                    clip_path_start(name, name_width)
+                }
+            })
+        })
+        .unwrap_or_else(|| clip_path_start(name, name_width));
     format!(" {name}{dirty_marker}{stale_marker}{read_only_marker}{maximized_marker} ")
 }
 
@@ -3421,11 +3679,8 @@ fn draw_picker(frame: &mut Frame<'_>, app: &TuiApp<'_>, editor_area: Rect) {
         )),
         rows[0],
     );
-    let query_cells = picker
-        .query
-        .chars()
-        .take(picker.query_cursor)
-        .map(|character| character.width().unwrap_or(0))
+    let query_cells = crate::grapheme::cells(picker.query.chars().take(picker.query_cursor))
+        .map(|(_, cells)| cells)
         .sum::<usize>();
     let query_x = rows[0]
         .x
@@ -3606,11 +3861,8 @@ fn draw_resource_finder(
         )),
         rows[0],
     );
-    let query_cells = picker
-        .query
-        .chars()
-        .take(picker.query_cursor)
-        .map(|character| character.width().unwrap_or(0))
+    let query_cells = crate::grapheme::cells(picker.query.chars().take(picker.query_cursor))
+        .map(|(_, cells)| cells)
         .sum::<usize>();
     let query_x = rows[0]
         .x
@@ -3894,23 +4146,27 @@ fn matched_path_line(
     if width == 0 {
         return Line::default();
     }
-    let characters = path.chars().collect::<Vec<_>>();
-    let total_width = characters
-        .iter()
-        .map(|character| character.width().unwrap_or(0))
-        .sum::<usize>();
+    // Whole characters, each with the index of its first code point, which is
+    // how match positions count.
+    let mut clusters = Vec::new();
+    let mut index = 0;
+    for cluster in path.graphemes(true) {
+        clusters.push((index, cluster));
+        index += cluster.chars().count();
+    }
+    let total_width = crate::grapheme::str_width(path);
     let truncated = total_width > width;
     let start = if truncated {
         let budget = width.saturating_sub(1);
         let mut used = 0;
-        let mut start = characters.len();
-        for (index, character) in characters.iter().enumerate().rev() {
-            let cells = character.width().unwrap_or(0);
+        let mut start = clusters.len();
+        for (position, (_, cluster)) in clusters.iter().enumerate().rev() {
+            let cells = crate::grapheme::width(cluster);
             if used + cells > budget {
                 break;
             }
             used += cells;
-            start = index;
+            start = position;
         }
         start
     } else {
@@ -3920,14 +4176,11 @@ fn matched_path_line(
     if truncated {
         spans.push(Span::styled("…", Style::default().fg(normal)));
     }
-    for (index, character) in characters.into_iter().enumerate().skip(start) {
+    for (index, cluster) in clusters.into_iter().skip(start) {
+        let matched = (index..index + cluster.chars().count()).any(|at| positions.contains(&at));
         spans.push(Span::styled(
-            character.to_string(),
-            Style::default().fg(if positions.contains(&index) {
-                accent
-            } else {
-                normal
-            }),
+            cluster.to_owned(),
+            Style::default().fg(if matched { accent } else { normal }),
         ));
     }
     Line::from(spans)
@@ -4215,28 +4468,31 @@ fn draw_list(frame: &mut Frame<'_>, app: &TuiApp<'_>, editor_area: Rect) {
                         .filter(|text| !text.is_empty())
                         .map(|text| text.width() + 2)
                         .sum::<usize>();
-                    let mut spans = elided_label(
-                        &item.label,
-                        item.elide_from,
-                        row_width.saturating_sub(reserved),
-                    )
-                    .into_iter()
-                    .map(|(source, character)| {
-                        let style = match source {
-                            Some(index) if emphasized.contains(&index) => {
-                                Style::default().fg(app.theme.accent).bold()
-                            }
-                            Some(index) => {
-                                match tint_at(&item.tints, false, index).filter(|_| tinted) {
-                                    Some(tint) => Style::default().fg(tint_color(&app.theme, tint)),
-                                    None => Style::default().fg(text_color),
+                    let mut spans = join_clusters(
+                        elided_label(
+                            &item.label,
+                            item.elide_from,
+                            row_width.saturating_sub(reserved),
+                        )
+                        .into_iter()
+                        .map(|(source, character)| {
+                            let style = match source {
+                                Some(index) if emphasized.contains(&index) => {
+                                    Style::default().fg(app.theme.accent).bold()
                                 }
-                            }
-                            None => Style::default().fg(text_color),
-                        };
-                        Span::styled(character.to_string(), style)
-                    })
-                    .collect::<Vec<_>>();
+                                Some(index) => {
+                                    match tint_at(&item.tints, false, index).filter(|_| tinted) {
+                                        Some(tint) => {
+                                            Style::default().fg(tint_color(&app.theme, tint))
+                                        }
+                                        None => Style::default().fg(text_color),
+                                    }
+                                }
+                                None => Style::default().fg(text_color),
+                            };
+                            Span::styled(character.to_string(), style)
+                        }),
+                    );
                     // A row's detail is the muted half of what it says, in
                     // both layouts. The snapshot renderer an attached client
                     // uses has always drawn it here; dropping it in this one
@@ -5127,18 +5383,18 @@ fn wrapped_text_rows(text: &str, width: u16) -> usize {
 
 /// Keep the insertion point visible without splitting Unicode characters.
 fn prompt_query_window(query: &str, cursor: usize, width: u16) -> (String, usize) {
-    let mut cells: usize = query
-        .chars()
-        .take(cursor)
-        .map(|c| c.width().unwrap_or(0))
+    let mut cells: usize = crate::grapheme::cells(query.chars().take(cursor))
+        .map(|(_, cells)| cells)
         .sum();
     let mut start = 0;
-    for (byte, character) in query.char_indices().take(cursor) {
-        if cells < usize::from(width.max(1)) {
+    let mut characters = 0;
+    for (byte, cluster) in query.grapheme_indices(true) {
+        if characters >= cursor || cells < usize::from(width.max(1)) {
             break;
         }
-        cells = cells.saturating_sub(character.width().unwrap_or(0));
-        start = byte + character.len_utf8();
+        cells = cells.saturating_sub(crate::grapheme::width(cluster));
+        characters += cluster.chars().count();
+        start = byte + cluster.len();
     }
     (query[start..].to_owned(), cells)
 }
@@ -6376,6 +6632,8 @@ mod tests {
         let app = App::new(Config::default(), None).unwrap();
         let theme = TuiTheme::new(&app.theme);
         let pane = PaneSnapshot {
+            preview: None,
+            media: None,
             pane_id: 0,
             area: Rect {
                 x: 0,
@@ -6444,6 +6702,8 @@ mod tests {
         let app = App::new(Config::default(), None).unwrap();
         let theme = TuiTheme::new(&app.theme);
         let pane = PaneSnapshot {
+            preview: None,
+            media: None,
             pane_id: 0,
             area: Rect {
                 x: 0,
@@ -6529,6 +6789,8 @@ mod tests {
         let app = App::new(Config::default(), None).unwrap();
         let theme = TuiTheme::new(&app.theme);
         let pane = PaneSnapshot {
+            preview: None,
+            media: None,
             pane_id: 0,
             area: Rect {
                 x: 0,
@@ -6616,6 +6878,8 @@ mod tests {
         let app = App::new(Config::default(), None).unwrap();
         let theme = TuiTheme::new(&app.theme);
         let pane = PaneSnapshot {
+            preview: None,
+            media: None,
             pane_id: 0,
             area: Rect {
                 x: 0,
@@ -6688,6 +6952,8 @@ mod tests {
         let app = App::new(Config::default(), None).unwrap();
         let theme = TuiTheme::new(&app.theme);
         let pane = PaneSnapshot {
+            preview: None,
+            media: None,
             pane_id: 0,
             area: Rect {
                 x: 0,
@@ -7636,6 +7902,160 @@ mod tests {
         overlay
     }
 
+    #[test]
+    fn overlay_rectangles_cover_exactly_the_cells_painted_above_media() {
+        let mut app = App::new(Config::default(), None).unwrap();
+        let base = action_menu_overlay(&mut app, vec![("a", "First"), ("b", "Second")], 0);
+        let theme = TuiTheme::new(&app.theme);
+        let sentinel = ratatui::style::Color::Magenta;
+        for (width, height) in [(100, 40), (30, 12)] {
+            let prepared = app.prepare_view(frame_geometry(TuiRect::new(0, 0, width, height)));
+            let editor = app.snapshot(&prepared);
+            for (kind, layout, message) in [
+                (OverlayKind::BufferActions, OverlayLayout::Standard, None),
+                (OverlayKind::Prompt, OverlayLayout::Standard, None),
+                (OverlayKind::Prompt, OverlayLayout::Bottom, None),
+                (OverlayKind::Prompt, OverlayLayout::Setting, None),
+                (OverlayKind::Prompt, OverlayLayout::SettingChoice, None),
+                (OverlayKind::Confirmation, OverlayLayout::Standard, None),
+                (OverlayKind::FilePicker, OverlayLayout::Standard, None),
+                (OverlayKind::ResultList, OverlayLayout::Preview, None),
+                (OverlayKind::CommandPalette, OverlayLayout::Standard, None),
+                (OverlayKind::Completion, OverlayLayout::Standard, None),
+                (OverlayKind::PathCompletion, OverlayLayout::Standard, None),
+                (OverlayKind::KeyHints, OverlayLayout::Standard, None),
+                (
+                    OverlayKind::KeyHints,
+                    OverlayLayout::Standard,
+                    Some("Unknown key"),
+                ),
+                (
+                    OverlayKind::GitMergeReview,
+                    OverlayLayout::GitMergeReview,
+                    Some("Review changes"),
+                ),
+            ] {
+                let mut overlay = base.clone();
+                overlay.kind = kind;
+                overlay.layout = layout;
+                overlay.message = message.map(str::to_owned);
+                let areas = overlay_rectangles(&editor, std::slice::from_ref(&overlay));
+                assert_eq!(areas.len(), 1, "{kind:?} {layout:?}");
+                let area = areas[0];
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        frame.render_widget(
+                            Block::default().style(Style::default().bg(sentinel)),
+                            frame.area(),
+                        );
+                        draw_snapshot_overlay(frame, &theme, &overlay, &editor);
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                for y in 0..height {
+                    for x in 0..width {
+                        let covered = x >= area.x
+                            && x < area.x + area.width
+                            && y >= area.y
+                            && y < area.y + area.height;
+                        assert_eq!(
+                            buffer[(x, y)].bg != sentinel,
+                            covered,
+                            "{kind:?} {layout:?}, {width}x{height}, cell {x},{y}, {area:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pane_drop_overlay_rectangles_cover_only_the_painted_border() {
+        let mut app = App::new(Config::default(), None).unwrap();
+        let prepared = app.prepare_view(frame_geometry(TuiRect::new(0, 0, 20, 12)));
+        let mut editor = app.snapshot(&prepared);
+        let theme = TuiTheme::new(&app.theme);
+        for area in [
+            TuiRect::new(3, 2, 10, 7),
+            TuiRect::new(17, 9, 10, 7),
+            TuiRect::new(3, 2, 1, 7),
+            TuiRect::new(3, 2, 10, 1),
+        ] {
+            editor.pane_drop = Some(from_tui_rect(area));
+            let areas = overlay_rectangles(&editor, &[]);
+            let mut terminal = Terminal::new(TestBackend::new(20, 12)).unwrap();
+            terminal
+                .draw(|frame| draw_pane_drop(frame, &theme, editor.pane_drop))
+                .unwrap();
+            for y in 0..12 {
+                for x in 0..20 {
+                    let covered = areas.iter().any(|area| {
+                        x >= area.x
+                            && x < area.x + area.width
+                            && y >= area.y
+                            && y < area.y + area.height
+                    });
+                    assert_eq!(
+                        covered,
+                        terminal.backend().buffer()[(x, y)].symbol() != " ",
+                        "drop {area:?}, cell {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn overlay_rectangles_exclude_hidden_assistance_and_empty_hints() {
+        let mut app = App::new(Config::default(), None).unwrap();
+        let mut completion = action_menu_overlay(&mut app, vec![("a", "First")], 0);
+        completion.kind = OverlayKind::Completion;
+        let prepared = app.prepare_view(frame_geometry(TuiRect::new(0, 0, 100, 40)));
+        let mut editor = app.snapshot(&prepared);
+        let mut signature = completion.clone();
+        signature.kind = OverlayKind::Signature;
+        assert_eq!(
+            overlay_rectangles(&editor, &[signature.clone(), completion.clone()]),
+            overlay_rectangles(&editor, std::slice::from_ref(&completion)),
+        );
+        assert_eq!(overlay_rectangles(&editor, &[signature]).len(), 1);
+        let mut hints = completion.clone();
+        hints.kind = OverlayKind::KeyHints;
+        hints.rows.clear();
+        assert!(overlay_rectangles(&editor, &[hints]).is_empty());
+        editor.geometry.editor.width = 2;
+        assert!(overlay_rectangles(&editor, &[completion]).is_empty());
+    }
+
+    #[test]
+    fn native_snapshot_renderer_keeps_the_frontends_session_label() {
+        let app = App::new(Config::default(), None).unwrap();
+        let mut host = crate::workspace::WorkspaceHost::new(app);
+        let snapshot = host.prepare_frame(frame_geometry(TuiRect::new(0, 0, 100, 24)));
+        for (session, label) in [
+            (SessionMode::Editor, "editor"),
+            (SessionMode::Standalone, "ide"),
+            (SessionMode::Persistent, "ide+mux"),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_native_frame(frame, &snapshot, session, TerminalColorDepth::TrueColor);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let y = snapshot.editor.geometry.status.y;
+            let status = (0..100)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>();
+            assert!(status.contains(label), "{session:?}: {status:?}");
+            if session != SessionMode::Persistent {
+                assert!(!status.contains("ide+mux"), "{status:?}");
+            }
+        }
+    }
+
     /// The content columns of the titled overlay, read off the corners of its
     /// own border rather than off the panes drawn behind it.
     fn overlay_extent(buffer: &ratatui::buffer::Buffer, title: &str) -> (u16, u16) {
@@ -8153,6 +8573,109 @@ mod tests {
     }
 
     #[test]
+    fn terminal_cursor_on_either_half_of_an_emoji_highlights_the_whole_glyph() {
+        let app = App::new(Config::default(), None).unwrap();
+        let theme = TuiTheme::new(&app.theme);
+        for emoji in ["😃", "😶‍🌫️", "❤️"] {
+            let mut emulator = crate::terminal::emulator::Emulator::new(4, 1);
+            emulator.feed(format!("{emoji}x").as_bytes());
+            let mut view = TerminalView {
+                revision: 0,
+                columns: 4,
+                rows: vec![emulator.grid().line(0).unwrap().clone()],
+                line_ids: vec![None],
+                cursor: None,
+                scrollback: 0,
+                live: true,
+                review: false,
+                newer_output: false,
+                highlights: Vec::new(),
+            };
+            for column in [0, 1, 2] {
+                view.cursor = Some((0, column));
+                for active in [false, true] {
+                    let mut terminal = Terminal::new(TestBackend::new(4, 1)).unwrap();
+                    // Inspect the composed frame, including spacer styles;
+                    // the native frontend reads these without TUI diffing.
+                    let frame = terminal
+                        .draw(|frame| {
+                            draw_terminal(
+                                frame,
+                                &theme,
+                                Mode::Insert,
+                                active,
+                                false,
+                                &view,
+                                frame.area(),
+                            );
+                        })
+                        .unwrap();
+                    let buffer = frame.buffer;
+                    assert_eq!(buffer[(0, 0)].symbol(), emoji);
+                    assert_eq!(buffer[(2, 0)].symbol(), "x");
+                    assert_eq!(buffer[(0, 0)].style(), buffer[(1, 0)].style());
+                    let lead = if column < 2 { 0 } else { 2 };
+                    let other = if column < 2 { 2 } else { 0 };
+                    if active {
+                        assert_eq!(buffer[(lead, 0)].bg, theme.cursor(Mode::Insert));
+                        assert_ne!(buffer[(other, 0)].bg, theme.cursor(Mode::Insert));
+                    } else {
+                        assert!(buffer[(lead, 0)].modifier.contains(Modifier::UNDERLINED));
+                        assert!(!buffer[(other, 0)].modifier.contains(Modifier::UNDERLINED));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_wide_cell_styles_clip_to_a_smaller_frame_during_resize() {
+        let app = App::new(Config::default(), None).unwrap();
+        let theme = TuiTheme::new(&app.theme);
+        let mut emulator = crate::terminal::emulator::Emulator::new(8, 3);
+        emulator.feed("😃xx😶‍🌫️\r\n😃xx😶‍🌫️\r\n😃xx😶‍🌫️".as_bytes());
+        let view = TerminalView {
+            revision: 0,
+            columns: 8,
+            rows: (0..3)
+                .map(|row| emulator.grid().line(row).unwrap().clone())
+                .collect(),
+            line_ids: vec![None; 3],
+            cursor: Some((0, 1)),
+            scrollback: 0,
+            live: true,
+            review: false,
+            newer_output: false,
+            highlights: Vec::new(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(6, 3)).unwrap();
+        let frame = terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("######\n#     \n#     "), frame.area());
+                draw_terminal(
+                    frame,
+                    &theme,
+                    Mode::Insert,
+                    true,
+                    false,
+                    &view,
+                    TuiRect::new(1, 1, 8, 3),
+                );
+            })
+            .unwrap();
+        for x in 0..6 {
+            assert_eq!(frame.buffer[(x, 0)].symbol(), "#");
+        }
+        for y in 1..3 {
+            assert_eq!(frame.buffer[(0, y)].symbol(), "#");
+            assert_eq!(frame.buffer[(1, y)].symbol(), "😃");
+            assert_eq!(frame.buffer[(1, y)].style(), frame.buffer[(2, y)].style());
+            assert_eq!(frame.buffer[(5, y)].symbol(), " ", "clipped wide glyph");
+        }
+        assert_eq!(frame.buffer[(1, 1)].bg, theme.cursor(Mode::Insert));
+    }
+
+    #[test]
     fn active_terminal_cursor_uses_the_theme_color_for_each_mode() {
         let app = App::new(Config::default(), None).unwrap();
         let theme = TuiTheme::new(&app.theme);
@@ -8421,6 +8944,30 @@ mod tests {
 
     #[test]
     fn an_overlong_destination_name_keeps_its_file_name() {
+        // An ellipsis never cuts an emoji sequence apart.
+        let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+        let label = format!("* [file]  {}", family.repeat(20));
+        let kept = elided_label(&label, Some(10), 30)
+            .into_iter()
+            .map(|(_, character)| character)
+            .collect::<String>();
+        assert!(kept.contains('…'));
+        for piece in kept[10..].split('…') {
+            let piece = piece.trim_end();
+            assert_eq!(
+                piece.chars().count() % 7,
+                0,
+                "{piece:?} holds part of an emoji"
+            );
+        }
+        assert_eq!(crate::grapheme::str_width(&kept), 30);
+        let spans = join_clusters(
+            family
+                .chars()
+                .map(|character| Span::raw(character.to_string())),
+        );
+        assert_eq!(spans.len(), 1);
+
         let drawn = |label: &str, from, budget| {
             elided_label(label, from, budget)
                 .into_iter()

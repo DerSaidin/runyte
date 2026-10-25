@@ -2185,7 +2185,12 @@ fn space_e_uses_the_markdown_source_directory_and_selects_its_file() {
             Some(file.as_path())
         );
         key(&mut app, KeyCode::Enter, Modifiers::NONE);
-        assert_eq!(app.active().buffer, source);
+        // The entry opens the document the way this pane last showed it.
+        if rendered {
+            assert_eq!(app.active_buffer().markdown_render_source(), Some(source));
+        } else {
+            assert_eq!(app.active().buffer, source);
+        }
     }
 
     fs::remove_dir_all(root).unwrap();

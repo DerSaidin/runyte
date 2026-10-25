@@ -7,7 +7,7 @@
 # their own files" in docs/user-guide.md.
 #
 # Run :config-reload after editing this file to apply it to a running editor.
-# editor.mouse, lsp.enable, mode, and workspace.state are read at startup and
+# editor.mouse, editor.font_size, lsp.enable, mode, and workspace.state are read at startup and
 # are reported as needing a restart instead.
 #
 # The mode a launch without --editor, --ide, or --mux runs in: ide (the
@@ -15,6 +15,7 @@
 # project's host and attach to it; launches naming a file stay in ide.
 mode: ide
 editor:
+  font_size: 15 # native window logical pixels, 8–48; reopen window to apply
   line_numbers: true
   # Distances from the cursor; its own line keeps its absolute number.
   relative_line_numbers: false
@@ -41,6 +42,8 @@ editor:
   command_mode_dim: true
   auto_close_terminal: true # forget terminal output when its program exits
   terminal_theme_colors: true # use the theme for terminal ANSI colours 0–15
+  # Paint :preview documents in the active theme; false keeps them light.
+  preview_theme_colors: true
 
 # Refresh visible Git views and tracked-file gutters automatically;
 # :git-refresh remains available.

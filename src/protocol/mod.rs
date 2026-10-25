@@ -200,7 +200,15 @@ use crate::workspace::{
 // Version 71 adds the native merge review overlay kind and layout.
 // Version 72 adds the theme ANSI palette and live terminal colour setting.
 // Version 73 carries each pane's relative line-number origin.
-pub const VERSION: u32 = 73;
+// Version 74 adds native media attachment capabilities, pane metadata, media
+// actions and requests, and cross-platform paint acknowledgements.
+// Version 75 adds zoom-aware vertical PDF media actions.
+// Version 76 adds native document preview captures.
+// Version 77 adds generation-checked dismissal of those captures.
+// Version 78 adds a correlated post-input snapshot for bundled window routing.
+// Version 79 carries the live document-preview theme colour setting.
+// Version 80 carries pane-drop previews and explicit pointer-capture cancellation.
+pub const VERSION: u32 = 80;
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PATHS: usize = 32;
 pub const MAX_PATH_BYTES: usize = 32 * 1024;
@@ -467,6 +475,26 @@ pub enum ClientRequest {
         /// the client rather than being a property of the host.
         #[serde(default)]
         directory_handoff: bool,
+        /// Whether the attached frontend can decode and display media panes.
+        native_media: bool,
+    },
+    MediaNavigate {
+        pane: usize,
+        path: Vec<u8>,
+        delta: i32,
+    },
+    MediaBack {
+        pane: usize,
+        path: Vec<u8>,
+        page: usize,
+    },
+    DismissDocumentPreview {
+        pane: usize,
+        generation: u64,
+    },
+    MediaPages {
+        path: Vec<u8>,
+        pages: usize,
     },
     Input {
         event: InputEvent,
@@ -477,7 +505,6 @@ pub enum ClientRequest {
     /// Confirms that the bundled native frontend drew this complete
     /// frame. This establishes attachment readiness only; it is never physical
     /// input or approval for an editor action.
-    #[cfg(windows)]
     FrameDrawn {
         frame: FrameId,
     },
@@ -557,10 +584,16 @@ pub enum ClientRequest {
         frame: FrameId,
         repetitions: u16,
     },
+    /// Cancels a captured pointer gesture after frontend focus or capture loss.
+    CancelPointer,
     Resize {
         geometry: FrameGeometry,
     },
     Resynchronize,
+    /// Correlates a complete snapshot prepared after preceding physical input.
+    InputBarrier {
+        serial: u64,
+    },
     /// Completes a source-host-owned native switch after the frontend has
     /// authenticated and rendered the prepared destination.
     NativeSwitchCommit {
@@ -782,6 +815,19 @@ impl ClientRequest {
                     "invalid client version length",
                 )?;
                 geometry.validate()
+            }
+            Self::MediaNavigate { path, delta, .. } => {
+                validate_path_bytes(path)?;
+                require(delta.unsigned_abs() <= 10_000, "media delta exceeds limit")
+            }
+            Self::MediaBack { path, page, .. } => {
+                validate_path_bytes(path)?;
+                require((1..=10_000).contains(page), "invalid media page")
+            }
+            Self::DismissDocumentPreview { .. } => Ok(()),
+            Self::MediaPages { path, pages } => {
+                validate_path_bytes(path)?;
+                require((1..=10_000).contains(pages), "invalid media page count")
             }
             Self::Input { event, .. } => match event {
                 InputEvent::Text(text) => require(
@@ -1084,6 +1130,18 @@ pub struct NativeSwitchCandidate {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum HostResponse {
+    InputBarrier {
+        serial: u64,
+        frame: Box<HostFrame>,
+    },
+    MediaAction {
+        /// First complete frame whose media target includes this action.
+        frame: FrameId,
+        pane: usize,
+        path: Vec<u8>,
+        page: usize,
+        action: frame::MediaAction,
+    },
     Welcome {
         protocol: u32,
         pid: u32,
@@ -1313,6 +1371,7 @@ mod tests {
                 client_version: CLIENT_VERSION.to_owned(),
                 role: ClientRole::Interactive,
                 geometry: FrameGeometry::default(),
+                native_media: false,
                 directory_handoff: false,
             },
             ClientRequest::OpenBuffers {
@@ -1508,7 +1567,7 @@ mod tests {
 
     #[test]
     fn protocol_version_and_request_bounds_are_explicit() {
-        assert_eq!(VERSION, 73);
+        assert_eq!(VERSION, 80);
         let oversized_command = ClientRequest::Invoke {
             command: CommandRequest {
                 name: "open".to_owned(),
@@ -1780,7 +1839,7 @@ mod tests {
     fn maximum_terminal_geometry_fits_the_wire_frame_budget() {
         let cell = frame::TerminalCell {
             character: '\u{10ffff}',
-            combining: vec!['\u{10ffff}'; 3],
+            combining: vec!['\u{10ffff}'; crate::terminal::COMBINING_CAPACITY],
             width: 2,
             foreground: frame::TerminalColor::Rgb(255, 255, 255),
             background: frame::TerminalColor::Rgb(255, 255, 255),

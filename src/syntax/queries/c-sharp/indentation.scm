@@ -9,3 +9,4 @@
   (switch_section)
 ] @indent.always
 (initializer_expression) @indent.begin
+["{" "(" "["] @indent.opener

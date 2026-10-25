@@ -67,7 +67,7 @@ use crate::jump_labels::{JumpLabels, LabelPart};
 use crate::selection::{Range, Selection};
 
 use emulator::Emulator;
-pub use grid::{Attributes, Cell, Color, TerminalLineId};
+pub use grid::{Attributes, COMBINING_CAPACITY, Cell, Color, TerminalLineId};
 
 /// The effective default colours a child may ask its terminal to report.
 ///
@@ -459,6 +459,42 @@ const INDENTED_LINK_ROWS: usize = 16;
 /// wraps at.
 const WRAP_EDGE_WINDOW: usize = 64;
 
+impl TerminalReview {
+    /// The first offset of the cell holding `offset`. A cell can hold a
+    /// whole emoji sequence or a letter and its marks, and every code point
+    /// in it shares the cell's column; a caret only rests on the first.
+    fn cell_start(&self, offset: usize) -> usize {
+        let Some(line) = self.lines.get(review_line_for_offset(self, offset)) else {
+            return offset;
+        };
+        if offset < line.text_start || offset >= line.text_end {
+            return offset;
+        }
+        let column = line.char_columns[offset - line.text_start];
+        let mut start = offset;
+        while start > line.text_start && line.char_columns[start - 1 - line.text_start] == column {
+            start -= 1;
+        }
+        start
+    }
+
+    /// The offset just past the cell holding `offset`.
+    fn cell_end(&self, offset: usize) -> usize {
+        let Some(line) = self.lines.get(review_line_for_offset(self, offset)) else {
+            return offset + 1;
+        };
+        if offset < line.text_start || offset >= line.text_end {
+            return offset + 1;
+        }
+        let column = line.char_columns[offset - line.text_start];
+        let mut end = offset + 1;
+        while end < line.text_end && line.char_columns[end - line.text_start] == column {
+            end += 1;
+        }
+        end
+    }
+}
+
 impl ReviewLine {
     fn characters<'a>(&self, text: &'a [char]) -> &'a [char] {
         // Blank rows at the end of the snapshot are trimmed from its text.
@@ -507,6 +543,61 @@ impl ReviewLine {
 }
 
 impl TerminalReview {
+    fn navigation_target_at(&self, head: usize) -> Option<String> {
+        let row = self
+            .lines
+            .iter()
+            .position(|line| line.text_start <= head && head < line.text_end)?;
+        let line = &self.lines[row];
+        let mut first = row;
+        while first > 0 && self.lines[first].continuation_columns.is_some() {
+            first -= 1;
+        }
+        let mut last = row;
+        while last + 1 < self.lines.len() && self.lines[last + 1].continuation_columns.is_some() {
+            last += 1;
+        }
+        if first != last {
+            let mut joined = String::new();
+            let mut caret = head - line.text_start;
+            for index in first..=last {
+                let current = &self.lines[index];
+                let columns = if index < last {
+                    self.lines[index + 1].continuation_columns.unwrap()
+                } else {
+                    current.cells.len()
+                };
+                for cell in current
+                    .cells
+                    .iter()
+                    .take(columns)
+                    .filter(|cell| cell.width != 0)
+                {
+                    joined.push(cell.character);
+                    joined.extend(cell.combining[..usize::from(cell.combining_len)].iter());
+                    if index < row {
+                        caret += 1 + usize::from(cell.combining_len);
+                    }
+                }
+            }
+            if let Some(target) = crate::navigation_target::under_cursor(&joined, caret)
+                && crate::navigation_target::web_url(&target).is_some()
+            {
+                return Some(target);
+            }
+        }
+        if let Some(target) = self.indented_web_link(row, head) {
+            return Some(target);
+        }
+        let text: String = self
+            .text
+            .chars()
+            .skip(line.text_start)
+            .take(line.text_end - line.text_start)
+            .collect();
+        crate::navigation_target::under_cursor(&text, head - line.text_start)
+    }
+
     /// Whether row `upper + 1` carries on a web link that a program, rather
     /// than the terminal, broke at the end of row `upper`.
     ///
@@ -800,87 +891,93 @@ impl TerminalSession {
 
     fn ensure_review(&mut self) -> &mut TerminalReview {
         if self.review.is_none() {
-            let grid = self.emulator.grid();
-            let mut text = String::new();
-            let mut text_chars = 0;
-            let mut lines = Vec::new();
-            for (row, (id, cells)) in grid.retained_lines().enumerate() {
-                let text_start = text_chars;
-                let end = cells
-                    .iter()
-                    .rposition(|cell| cell.width != 0 && cell.character != ' ')
-                    .map_or(0, |index| index + 1);
-                let mut char_columns = Vec::new();
-                for (column, cell) in cells[..end].iter().enumerate() {
-                    if cell.width != 0 {
-                        char_columns.push(column);
-                        text.push(cell.character);
-                        for combining in &cell.combining[..usize::from(cell.combining_len)] {
-                            char_columns.push(column);
-                            text.push(*combining);
-                        }
-                    }
-                }
-                let text_end = text_start + char_columns.len();
-                lines.push(ReviewLine {
-                    continuation_columns: grid.continuation_columns(row),
-                    id,
-                    cells: cells.clone(),
-                    text_start,
-                    text_end,
-                    char_columns,
-                });
-                text.push('\n');
-                text_chars = text_end + 1;
-            }
-            while text.ends_with("\n\n") {
-                text.pop();
-            }
-            let visible_end = lines.len().saturating_sub(self.scroll);
-            let visible_start = visible_end.saturating_sub(grid.rows());
-            let caret = if self.scroll == 0 {
-                let cursor_line = grid.scrollback_len() + grid.cursor.row;
-                lines
-                    .get(cursor_line)
-                    .filter(|line| line.text_start < line.text_end)
-                    .map(|line| {
-                        let relative = line
-                            .char_columns
-                            .iter()
-                            .position(|column| *column >= grid.cursor.column)
-                            .unwrap_or_else(|| line.char_columns.len().saturating_sub(1));
-                        line.text_start + relative
-                    })
-                    .or_else(|| {
-                        lines[..cursor_line.min(lines.len())]
-                            .iter()
-                            .rev()
-                            .find(|line| line.text_start < line.text_end)
-                            .map(|line| line.text_end.saturating_sub(1))
-                    })
-            } else {
-                None
-            }
-            .or_else(|| {
-                lines[visible_start..visible_end]
-                    .iter()
-                    .find(|line| line.text_start < line.text_end)
-                    .map(|line| line.text_start)
-            })
-            .unwrap_or(0);
-            self.review = Some(TerminalReview {
-                source_revision: self.content_revision,
-                lines,
-                text,
-                selection: Selection::point(caret),
-                matches: Vec::new(),
-                active_match: None,
-                scroll: self.scroll,
-                bottom_padding: 0,
-            });
+            self.review = Some(self.capture_review());
             self.revision = self.revision.wrapping_add(1);
         }
         self.review.as_mut().expect("review was created")
+    }
+
+    /// A bounded text snapshot, also used for live pointer navigation without
+    /// entering review or changing terminal selection, scroll, or revision.
+    fn capture_review(&self) -> TerminalReview {
+        let grid = self.emulator.grid();
+        let mut text = String::new();
+        let mut text_chars = 0;
+        let mut lines = Vec::new();
+        for (row, (id, cells)) in grid.retained_lines().enumerate() {
+            let text_start = text_chars;
+            let end = cells
+                .iter()
+                .rposition(|cell| cell.width != 0 && cell.character != ' ')
+                .map_or(0, |index| index + 1);
+            let mut char_columns = Vec::new();
+            for (column, cell) in cells[..end].iter().enumerate() {
+                if cell.width != 0 {
+                    char_columns.push(column);
+                    text.push(cell.character);
+                    for combining in &cell.combining[..usize::from(cell.combining_len)] {
+                        char_columns.push(column);
+                        text.push(*combining);
+                    }
+                }
+            }
+            let text_end = text_start + char_columns.len();
+            lines.push(ReviewLine {
+                continuation_columns: grid.continuation_columns(row),
+                id,
+                cells: cells.clone(),
+                text_start,
+                text_end,
+                char_columns,
+            });
+            text.push('\n');
+            text_chars = text_end + 1;
+        }
+        while text.ends_with("\n\n") {
+            text.pop();
+        }
+        let visible_end = lines.len().saturating_sub(self.scroll);
+        let visible_start = visible_end.saturating_sub(grid.rows());
+        let caret = if self.scroll == 0 {
+            let cursor_line = grid.scrollback_len() + grid.cursor.row;
+            lines
+                .get(cursor_line)
+                .filter(|line| line.text_start < line.text_end)
+                .map(|line| {
+                    let relative = line
+                        .char_columns
+                        .iter()
+                        .position(|column| *column >= grid.cursor.column)
+                        .unwrap_or_else(|| line.char_columns.len().saturating_sub(1));
+                    line.text_start + relative
+                })
+                .or_else(|| {
+                    lines[..cursor_line.min(lines.len())]
+                        .iter()
+                        .rev()
+                        .find(|line| line.text_start < line.text_end)
+                        .map(|line| line.text_end.saturating_sub(1))
+                })
+        } else {
+            None
+        }
+        .or_else(|| {
+            lines[visible_start..visible_end]
+                .iter()
+                .find(|line| line.text_start < line.text_end)
+                .map(|line| line.text_start)
+        })
+        .unwrap_or(0);
+        TerminalReview {
+            source_revision: self.content_revision,
+            lines,
+            text,
+            selection: Selection::point(caret),
+            matches: Vec::new(),
+            active_match: None,
+            scroll: self.scroll,
+            bottom_padding: 0,
+        }
     }
 
     /// Captures the retained output as the immutable surface Normal mode
@@ -1005,59 +1102,31 @@ impl TerminalSession {
                     .collect(),
             );
         }
-        let row = review
-            .lines
-            .iter()
-            .position(|line| line.text_start <= range.head && range.head < line.text_end)?;
-        let line = &review.lines[row];
-        let mut first = row;
-        while first > 0 && review.lines[first].continuation_columns.is_some() {
-            first -= 1;
+        review.navigation_target_at(range.head)
+    }
+
+    /// Resolves the character actually displayed at a pointer cell. Unlike
+    /// caret positioning, blank trailing cells do not clamp onto a link.
+    pub(crate) fn navigation_target_at_view_cell(
+        &self,
+        viewport_rows: usize,
+        row: usize,
+        column: usize,
+    ) -> Option<String> {
+        let captured;
+        let review = if let Some(review) = &self.review {
+            review
+        } else {
+            captured = self.capture_review();
+            &captured
+        };
+        let (start, end, padding) = review_visible_bounds(review, viewport_rows);
+        let index = row.checked_sub(padding)?.checked_add(start)?;
+        if index >= end {
+            return None;
         }
-        let mut last = row;
-        while last + 1 < review.lines.len() && review.lines[last + 1].continuation_columns.is_some()
-        {
-            last += 1;
-        }
-        if first != last {
-            let mut joined = String::new();
-            let mut caret = range.head - line.text_start;
-            for index in first..=last {
-                let current = &review.lines[index];
-                let columns = if index < last {
-                    review.lines[index + 1].continuation_columns.unwrap()
-                } else {
-                    current.cells.len()
-                };
-                for cell in current
-                    .cells
-                    .iter()
-                    .take(columns)
-                    .filter(|cell| cell.width != 0)
-                {
-                    joined.push(cell.character);
-                    joined.extend(cell.combining[..usize::from(cell.combining_len)].iter());
-                    if index < row {
-                        caret += 1 + usize::from(cell.combining_len);
-                    }
-                }
-            }
-            if let Some(target) = crate::navigation_target::under_cursor(&joined, caret)
-                && crate::navigation_target::web_url(&target).is_some()
-            {
-                return Some(target);
-            }
-        }
-        if let Some(target) = review.indented_web_link(row, range.head) {
-            return Some(target);
-        }
-        let text: String = review
-            .text
-            .chars()
-            .skip(line.text_start)
-            .take(line.text_end - line.text_start)
-            .collect();
-        crate::navigation_target::under_cursor(&text, range.head - line.text_start)
+        let offset = review_offset_at_column(&review.lines[index], column)?;
+        review.navigation_target_at(offset)
     }
 
     pub(crate) fn review_navigation_target_is_inferred(&mut self) -> bool {
@@ -1077,12 +1146,14 @@ impl TerminalSession {
             .iter()
             .map(|range| {
                 let from = range.from();
+                // A selection's last cell is copied whole, joined emoji and
+                // all, whichever of its code points the end rests on.
                 let to = if range.is_empty() && textless {
                     from
                 } else if range.is_empty() {
-                    (from + 1).min(text.len())
+                    review.cell_end(from).min(text.len())
                 } else {
-                    range.to().saturating_add(1).min(text.len())
+                    review.cell_end(range.to()).min(text.len())
                 };
                 text[from.min(text.len())..to.min(text.len())]
                     .iter()
@@ -1097,7 +1168,12 @@ impl TerminalSession {
         let review = self.ensure_review();
         let selection = review.selection.clone();
         review.selection = selection.transform(|range| {
-            let target = review_motion_target(review, range.head, motion, viewport_rows);
+            let target = review.cell_start(review_motion_target(
+                review,
+                range.head,
+                motion,
+                viewport_rows,
+            ));
             if extend {
                 range.extend_to(target)
             } else {
@@ -1130,6 +1206,7 @@ impl TerminalSession {
         let line = &review.lines[line_index];
         review_offset_at_column(line, column)
             .or_else(|| (line.text_start < line.text_end).then(|| line.text_end - 1))
+            .map(|offset| review.cell_start(offset))
     }
 
     /// The fixed end a Shift-click or drag extends from in review mode.
@@ -2113,7 +2190,7 @@ impl TerminalSession {
                     continue;
                 };
                 cell.character = character;
-                cell.combining = ['\0'; 3];
+                cell.combining = ['\0'; grid::COMBINING_CAPACITY];
                 cell.combining_len = 0;
                 cell.width = 1;
                 view.highlights.push(TerminalHighlight {
@@ -2313,11 +2390,11 @@ fn review_motion_target(
     let line_index = review_line_for_offset(review, head);
     let line = review.lines.get(line_index);
     match motion {
-        ReviewMotion::Left => (0..head.min(text_len))
+        ReviewMotion::Left => (0..review.cell_start(head).min(text_len))
             .rev()
             .find(|offset| characters[*offset] != '\n')
             .unwrap_or(head),
-        ReviewMotion::Right => (head.saturating_add(1)..text_len)
+        ReviewMotion::Right => (review.cell_end(head)..text_len)
             .find(|offset| characters[*offset] != '\n')
             .unwrap_or(head),
         ReviewMotion::LineStart => line.map_or(0, |line| line.text_start),
@@ -3519,6 +3596,27 @@ mod tests {
         let measured = WORKSPACE_SCROLLBACK_CELLS * std::mem::size_of::<Cell>();
         assert!(measured <= WORKSPACE_TERMINAL_CELL_BYTES);
         assert!(WORKSPACE_TERMINAL_CELL_BYTES - measured < std::mem::size_of::<Cell>());
+    }
+
+    #[test]
+    fn review_motion_and_copy_take_whole_joined_cells() {
+        let mut session = session(12, 3);
+        session.feed("a👍🏽b".as_bytes());
+        session.ensure_review();
+        assert!(session.set_review_selection(0, 0));
+        session.move_review(ReviewMotion::Right, false);
+        assert_eq!(session.review_selection_text(), "👍🏽");
+        session.move_review(ReviewMotion::Right, false);
+        assert_eq!(session.review_selection_text(), "b");
+        session.move_review(ReviewMotion::Left, false);
+        assert_eq!(session.review_selection_text(), "👍🏽");
+
+        assert!(session.set_review_selection(0, 0));
+        session.move_review(ReviewMotion::Right, true);
+        assert_eq!(session.review_selection_text(), "a👍🏽");
+        // A selection ending on any code point of a cell copies all of it.
+        assert!(session.set_review_selection(0, 2));
+        assert_eq!(session.review_selection_text(), "a👍🏽");
     }
 
     #[test]

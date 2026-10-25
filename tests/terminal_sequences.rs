@@ -27,6 +27,159 @@ fn cursor(emulator: &Emulator) -> (usize, usize) {
     (cursor.row, cursor.column)
 }
 
+fn assert_wide_cells(emulator: &Emulator) {
+    for row in 0..emulator.rows() {
+        for (column, cell) in emulator.grid().line(row).unwrap().iter().enumerate() {
+            match cell.width {
+                0 => assert!(column > 0 && self::cell(emulator, row, column - 1).width == 2),
+                2 => assert!(
+                    column + 1 < emulator.columns()
+                        && self::cell(emulator, row, column + 1).width == 0
+                ),
+                1 => (),
+                width => panic!("unexpected cell width {width}"),
+            }
+            if cell.width != 0 {
+                assert_eq!(
+                    runyte::grapheme::width(&cell.display_text()),
+                    usize::from(cell.width)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pasted_emoji_survive_fragmented_output_and_addressed_redraws() {
+    for emoji in ["😃", "😶‍🌫️", "❤️", "1️⃣", "👍🏽", "🇵🇱"] {
+        let output = format!("A{emoji}{emoji}B");
+        for split in 0..=output.len() {
+            let mut emulator = Emulator::new(12, 2);
+            emulator.feed(&output.as_bytes()[..split]);
+            emulator.feed(&output.as_bytes()[split..]);
+            assert_eq!(screen(&emulator, 0), output);
+            assert_eq!(cursor(&emulator), (0, 6));
+            assert_eq!(cell(&emulator, 0, 1).text(), emoji);
+            assert_eq!(cell(&emulator, 0, 3).text(), emoji);
+            assert_wide_cells(&emulator);
+
+            // A child can address the second half of a glyph, then erase or
+            // overwrite it. Neither operation may leave a stale half behind.
+            emulator.feed(b"\x1b[1;5H\x1b[K");
+            assert_eq!(screen(&emulator, 0), format!("A{emoji}"));
+            emulator.feed(b"\x1b[1;3Hx");
+            assert_eq!(screen(&emulator, 0), "A x");
+            assert_wide_cells(&emulator);
+            emulator.feed(format!("\rA{emoji}B\x1b[K").as_bytes());
+            assert_eq!(screen(&emulator, 0), format!("A{emoji}B"));
+            assert_eq!(cursor(&emulator), (0, 4));
+            assert_wide_cells(&emulator);
+        }
+    }
+}
+
+#[test]
+fn shell_paste_redraw_and_backspace_keep_wide_cells_consistent() {
+    // Fixed output captured from Bash/readline, with two bracketed-pasted
+    // emoji, Left, End, Backspace, then a full redraw. Readline may delete a
+    // sequence component; the terminal must honor its column commands.
+    let mut emulator = Emulator::new(20, 2);
+    emulator.feed("$ \x1b[7m😶‍🌫️😶‍🌫️\x1b[27m".as_bytes());
+    emulator.feed("\r\x1b[C\x1b[C😶‍🌫️😶‍🌫️\x08".as_bytes());
+    assert_eq!(cursor(&emulator), (0, 5));
+    assert_eq!(cell(&emulator, 0, 5).width, 0);
+    assert_eq!(screen(&emulator, 0), "$ 😶‍🌫️😶‍🌫️");
+    emulator.feed(b"\x1b[C\x08\x1b[K");
+    assert_eq!(screen(&emulator, 0), "$ 😶‍🌫️");
+    assert_wide_cells(&emulator);
+    emulator.feed("\x1b[H\x1b[2J$ 😶‍🌫️😶‍".as_bytes());
+    assert_eq!(screen(&emulator, 0), "$ 😶‍🌫️😶‍");
+    assert_wide_cells(&emulator);
+}
+
+#[test]
+fn disabling_autowrap_before_a_selector_keeps_the_cluster_on_its_row() {
+    let mut emulator = Emulator::new(3, 2);
+    emulator.feed("ab❤\x1b[?7l".as_bytes());
+    assert_eq!(emulator.feed("️".as_bytes()), 0);
+    assert_eq!(screen(&emulator, 0), "ab❤️");
+    assert_eq!(screen(&emulator, 1), "");
+    assert_eq!(cell(&emulator, 0, 2).display_text(), "❤");
+    assert_eq!(cursor(&emulator), (0, 2));
+    assert_wide_cells(&emulator);
+}
+
+#[test]
+fn widening_emoji_insert_the_extra_column_without_overwriting_following_text() {
+    for emoji in ["❤️", "1️⃣", "😶‍🌫️"] {
+        let mut emulator = Emulator::new(8, 2);
+        emulator.feed(b"ab\xe7\x95\x8ccdef\r\x1b[4h");
+        for byte in emoji.as_bytes() {
+            emulator.feed(&[*byte]);
+        }
+        assert_eq!(screen(&emulator, 0), format!("{emoji}ab界cd"));
+        assert_eq!(cursor(&emulator), (0, 2));
+        assert_eq!(cell(&emulator, 0, 0).text(), emoji);
+        assert_wide_cells(&emulator);
+    }
+}
+
+#[test]
+fn widening_emoji_wrap_whole_and_count_one_completed_line() {
+    for rows in [1, 2] {
+        for insert in [false, true] {
+            let mut emulator = Emulator::new(3, rows);
+            if insert {
+                emulator.feed(b"\x1b[4h");
+            }
+            assert_eq!(emulator.feed("ab\x1b[31m❤".as_bytes()), 0);
+            assert_eq!(emulator.feed("\x1b[32m️".as_bytes()), 1);
+            let row = rows - 1;
+            assert_eq!(screen(&emulator, row), "❤️");
+            assert_eq!(cell(&emulator, row, 0).text(), "❤️");
+            assert_eq!(cell(&emulator, row, 0).foreground, Color::Indexed(1));
+            assert_eq!(cell(&emulator, row, 1).foreground, Color::Indexed(1));
+            assert_eq!(cursor(&emulator), (row, 2));
+            assert_eq!(emulator.grid().plain_line(0).unwrap(), "ab");
+            assert_eq!(emulator.grid().scrollback_len(), usize::from(rows == 1));
+            assert_wide_cells(&emulator);
+        }
+    }
+
+    // At a two-column destination, widening leaves delayed wrap pending.
+    let mut emulator = Emulator::new(2, 3);
+    assert_eq!(emulator.feed("a❤️".as_bytes()), 1);
+    assert_eq!(cursor(&emulator), (1, 1));
+    assert!(emulator.grid().cursor.pending_wrap);
+    assert_eq!(emulator.feed(b"x"), 1);
+    assert_eq!(screen(&emulator, 1), "❤️");
+    assert_eq!(screen(&emulator, 2), "x");
+    assert_wide_cells(&emulator);
+}
+
+#[test]
+fn widening_emoji_respect_insert_destinations_and_scroll_regions() {
+    let mut emulator = Emulator::new(3, 2);
+    emulator.feed("ab\r\ncde\x1b[1;3H\x1b[4h❤️".as_bytes());
+    assert_eq!(screen(&emulator, 0), "ab");
+    assert_eq!(screen(&emulator, 1), "❤️c");
+    assert_wide_cells(&emulator);
+
+    let mut emulator = Emulator::new(3, 3);
+    emulator.feed(b"TOP\x1b[2;3r\x1b[3;1H");
+    assert_eq!(emulator.feed("ab❤️".as_bytes()), 1);
+    assert_eq!(screen(&emulator, 0), "TOP");
+    assert_eq!(screen(&emulator, 1), "ab");
+    assert_eq!(screen(&emulator, 2), "❤️");
+    assert_eq!(emulator.grid().scrollback_len(), 0);
+    assert_wide_cells(&emulator);
+
+    emulator.feed(b"\x1b[?1049h");
+    assert_eq!(emulator.feed("ab❤️".as_bytes()), 0);
+    assert_eq!(screen(&emulator, 1), "❤️");
+    assert_wide_cells(&emulator);
+}
+
 #[test]
 fn cancelled_control_sequences_resume_printing_across_chunk_boundaries() {
     for prefix in [

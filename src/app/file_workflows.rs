@@ -12,7 +12,7 @@ mod host_open_atomicity;
 // Application-module dependencies:
 use super::{
     App, Axis, Buffer, BufferKind, CommandRefusal, ContentAlignment, DiffSession, DiffSide,
-    DirectoryReloadConfirmation, DirectoryView, FileObservation, FileReloadConfirmation,
+    DirectoryReloadConfirmation, DirectoryView, Edge, FileObservation, FileReloadConfirmation,
     FsConfirmation, FsOperation, FsPlan, GeneratedViewIdentity, HashSet, InputGrammar, Layout,
     ListAction, ListPicker, MAX_DIFF_BYTES, MaximizedPane, MaximizedView, Mode, PaneDirectory,
     Path, PathBuf, PickerItem, PromptKind, Result, Selection, SelectionSemantics, Side, TerminalId,
@@ -197,6 +197,7 @@ impl App {
         if !file.is_file() {
             return self.open_file(file);
         }
+        let was_showing = self.active().buffer;
         self.open_file(file.clone())?;
         let buffer = self.active().buffer;
         // A binary file is handed to an external program instead and leaves
@@ -209,12 +210,27 @@ impl App {
             return Ok(());
         }
         let text = self.buffers[buffer].text().to_string();
-        match crate::markdown::heading_anchor(&text, fragment) {
-            Some(offset) => {
+        let heading = crate::markdown::heading_anchor(&text, fragment);
+        if let Some(offset) = heading {
+            let pane = self.active_mut();
+            pane.replace_selection(Selection::point(offset.line));
+            pane.preserve_scroll = false;
+        }
+        self.resume_markdown_page(was_showing);
+        let page = self.active().buffer;
+        match heading {
+            // The page shows the heading's text without its markers, so the
+            // caret lands there, as `#heading` does within a page.
+            Some(offset) if page != buffer => {
+                let offset = self
+                    .markdown_positions
+                    .get(&page)
+                    .map_or(0, |positions| positions.to_page(offset.text));
                 let pane = self.active_mut();
-                pane.replace_selection(Selection::point(offset.line));
+                pane.replace_selection(Selection::point(offset));
                 pane.preserve_scroll = false;
             }
+            Some(_) => {}
             None => self.action_failed(format!("heading not found: #{fragment}")),
         }
         Ok(())
@@ -339,7 +355,7 @@ impl App {
     ) -> Result<()> {
         match candidates.as_slice() {
             [] => self.action_failed(format!("path not found: {requested_text}")),
-            [path] => self.open_file(path.clone())?,
+            [path] => self.open_document(path.clone())?,
             _ => {
                 let items = candidates
                     .iter()
@@ -387,7 +403,7 @@ impl App {
         let file = if matches!(buffer.kind, BufferKind::File) {
             buffer.path.clone()
         } else {
-            None
+            buffer.media_path.clone()
         };
         let directory = self
             .buffer_directory(source)
@@ -403,8 +419,8 @@ impl App {
         Ok(())
     }
 
-    /// Files contribute their parent, explorers their current directory, and
-    /// pathless views fall back to the directory controlled by `:cd`.
+    /// Files and media sources contribute their parent, explorers their current
+    /// directory, and pathless views fall back to the directory controlled by `:cd`.
     pub(super) fn active_directory(&self) -> PathBuf {
         self.buffer_directory(self.active().buffer)
             .unwrap_or_else(|| self.working_directory.clone())
@@ -421,6 +437,7 @@ impl App {
         buffer
             .path
             .as_deref()
+            .or(buffer.media_path.as_deref())
             .and_then(|path| {
                 if buffer.is_directory() {
                     Some(path)
@@ -478,7 +495,7 @@ impl App {
             self.status("no directory entry on this row");
             return Ok(());
         };
-        self.open_file(path)?;
+        self.open_document(path)?;
         // An explorer entry is an object to visit, not text to keep
         // extending. This also collapses a selection produced by `/` before
         // the next buffer or directory listing receives input. A dirty
@@ -953,6 +970,76 @@ impl App {
         }
     }
 
+    /// Open native launch targets with the same first-file and duplicate-position
+    /// policy as terminal startup. Media paths still use the ordinary open flow.
+    pub fn open_native_targets(&mut self, targets: Vec<crate::launch::LaunchTarget>) -> Result<()> {
+        let mut indices = std::collections::HashMap::new();
+        let mut unique: Vec<crate::launch::LaunchTarget> = Vec::new();
+        for target in targets {
+            let path = self.resolve_working_path(target.path.clone());
+            let identity = crate::path_safety::path_identity(&path)?;
+            if let Some(index) = indices.get(&identity).copied() {
+                let prior: &mut crate::launch::LaunchTarget = &mut unique[index];
+                if prior.position.is_none() {
+                    prior.position = target.position;
+                }
+            } else {
+                indices.insert(identity, unique.len());
+                unique.push(target);
+            }
+        }
+        let mut first = None;
+        for target in unique {
+            self.open_native_target(target)?;
+            if first.is_none() {
+                first = Some((
+                    self.active().buffer,
+                    self.active().selection.clone(),
+                    self.active_buffer()
+                        .is_directory()
+                        .then(|| self.active_buffer().path.clone())
+                        .flatten(),
+                ));
+            }
+        }
+        if let Some((buffer, selection, directory)) = first {
+            // Later directories retarget the pane's explorer in place, so its
+            // buffer ID alone no longer identifies the first destination.
+            if let Some(path) = directory {
+                self.open_file(path)?;
+            } else {
+                self.switch_buffer(buffer);
+            }
+            self.active_mut().replace_selection(selection);
+        }
+        Ok(())
+    }
+
+    /// Native frontend launch targets use the same path as explorer and :open.
+    pub fn open_native_target(&mut self, target: crate::launch::LaunchTarget) -> Result<()> {
+        let Some(position) = target.position else {
+            return self.open_document(target.path);
+        };
+        self.open_file(target.path)?;
+        let buffer = self.active().buffer;
+        self.launch_positions.insert(buffer, position);
+        self.apply_pending_launch_position(buffer);
+        Ok(())
+    }
+
+    /// Opens a document the way a person asks for one by name — `:open`, the
+    /// Finder, the directory tree, an explorer entry, or `gf` — and shows it
+    /// the way this pane last showed it: a Markdown document last read as its
+    /// rendered page opens on that page. A request for a position in the
+    /// text, such as a diagnostic or a definition, goes through
+    /// [`App::open_file`] and opens the source.
+    pub(super) fn open_document(&mut self, path: PathBuf) -> Result<()> {
+        let was_showing = self.active().buffer;
+        self.open_file(path)?;
+        self.resume_markdown_page(was_showing);
+        Ok(())
+    }
+
     pub(super) fn open_file(&mut self, path: PathBuf) -> Result<()> {
         ensure!(
             !self.plugins.filesystem_applying,
@@ -969,6 +1056,35 @@ impl App {
             }
         } else if let Some(index) = self.live_buffer_for_path(&path) {
             index
+        } else if self.native_media && crate::media::supported(&path) {
+            ensure!(
+                std::fs::metadata(&path)?.is_file(),
+                "media must be a regular file"
+            );
+            std::fs::File::open(&path)?;
+            let existing = self.buffers.iter().enumerate().find_map(|(index, buffer)| {
+                (!self.closed_buffers.contains(&index)
+                    && buffer.media_path.as_deref() == Some(&requested_identity))
+                .then_some(index)
+            });
+            if let Some(index) = existing {
+                index
+            } else {
+                let kind = if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
+                    "pdf"
+                } else {
+                    "image"
+                };
+                let mut buffer =
+                    Buffer::virtual_text(format!("[{kind}] {}", path.display()), "Page 1");
+                buffer.media_path = Some(requested_identity.clone());
+                self.buffers.push(buffer);
+                self.syntax.push(None);
+                self.buffers.len() - 1
+            }
         } else if external_open::looks_binary(&path) {
             // Before the buffer exists, so a file Runyte cannot edit never
             // becomes one it is holding open and cannot save.
@@ -1012,6 +1128,16 @@ impl App {
         self.refresh_background_buffer(buffer_id);
         let directory_view = self.directory_views.get(path).cloned();
         let launch_selection = self.take_pending_launch_selection(buffer_id);
+        let is_media = self.buffers[buffer_id].media_path.is_some();
+        let media_position = if is_media && launch_selection.is_none() {
+            if buffer_id == was_showing {
+                Some(super::view_position::ViewPosition::capture(self.active()))
+            } else {
+                self.active().saved_view_positions.get(&buffer_id).cloned()
+            }
+        } else {
+            None
+        };
         let pane = self.active_mut();
         pane.retarget(buffer_id);
         if let Some(view) = directory_view {
@@ -1028,6 +1154,16 @@ impl App {
             pane.row_prefix_scroll = 0;
         }
         pane.preserve_scroll = false;
+        if let Some(saved) = media_position {
+            saved.restore(pane);
+        }
+        if is_media
+            && (pane.saved_view_positions.len() < 128
+                || pane.saved_view_positions.contains_key(&buffer_id))
+        {
+            pane.saved_view_positions
+                .insert(buffer_id, super::view_position::ViewPosition::capture(pane));
+        }
         self.lsp_touch(buffer_id);
         self.status(format!("opened {}", path.display()));
         self.report_new_registry_errors();
@@ -1551,6 +1687,7 @@ impl App {
             if self.active_terminal().is_some() {
                 self.leave_terminal();
             }
+            self.refresh_markdown_page(buffer_id);
             return;
         }
         let refreshed = self.refresh_background_buffer(buffer_id);
@@ -1571,10 +1708,12 @@ impl App {
             self.buffers[buffer_id].generated_view_identity(),
             Some(crate::buffer::GeneratedViewIdentity::Plugin { .. })
         );
-        let saved_position = self.active().saved_view_positions.get(&buffer_id).cloned();
-        let selection = self
-            .take_pending_launch_selection(buffer_id)
-            .unwrap_or_else(|| Selection::point(0));
+        let launch_selection = self.take_pending_launch_selection(buffer_id);
+        let saved_position = launch_selection
+            .is_none()
+            .then(|| self.active().saved_view_positions.get(&buffer_id).cloned())
+            .flatten();
+        let selection = launch_selection.unwrap_or_else(|| Selection::point(0));
         let pane = self.active_mut();
         pane.retarget(buffer_id);
         pane.directory_buffer = explorer;
@@ -1596,6 +1735,7 @@ impl App {
         if refreshed {
             self.normalize_buffer(buffer_id);
         }
+        self.refresh_markdown_page(buffer_id);
         self.lsp_touch(buffer_id);
         self.status(format!("buffer {}", self.buffers[buffer_id].display_name()));
     }
@@ -2199,6 +2339,16 @@ impl App {
         }
     }
 
+    /// Splits the active pane and opens `path` in the new one by name, as
+    /// [`App::open_document`] does. The new pane inherits the history it
+    /// remembers views by from the pane it was split from.
+    pub(super) fn split_document(&mut self, axis: Axis, path: PathBuf) -> Result<()> {
+        let was_showing = self.active().buffer;
+        self.split(axis, Some(path))?;
+        self.resume_markdown_page(was_showing);
+        Ok(())
+    }
+
     pub(super) fn split(&mut self, axis: Axis, path: Option<PathBuf>) -> Result<()> {
         if let Some(maximized) = self.maximized {
             return Err(CommandRefusal::routine(format!(
@@ -2688,6 +2838,7 @@ impl App {
         let layout = self.layout.clone().without(closing).unwrap();
         self.layout = layout;
         self.panes.remove(&closing);
+        self.document_previews.remove(&closing);
         self.areas.remove(&closing);
         self.pane_opened_at.remove(&closing);
         self.pane_activated_at.remove(&closing);
@@ -2740,7 +2891,14 @@ impl App {
             self.action_failed("no previously focused pane to swap with");
             return;
         };
+        self.swap_pane_contents(previous);
+    }
 
+    /// Exchanges the complete contents of the active pane with `previous`,
+    /// then follows the active content to `previous`'s position. The split tree and
+    /// its pane geometry remain untouched.
+    pub(super) fn swap_pane_contents(&mut self, previous: usize) {
+        let active = self.active_pane;
         let active_content = self
             .panes
             .remove(&active)
@@ -2751,6 +2909,15 @@ impl App {
             .expect("pane history must name a live pane");
         self.panes.insert(active, previous_content);
         self.panes.insert(previous, active_content);
+
+        let active_preview = self.document_previews.remove(&active);
+        let previous_preview = self.document_previews.remove(&previous);
+        if let Some(preview) = active_preview {
+            self.document_previews.insert(previous, preview);
+        }
+        if let Some(preview) = previous_preview {
+            self.document_previews.insert(active, preview);
+        }
 
         if let Some(presentation) = self.search_selection.as_mut() {
             if presentation.pane == active {
@@ -2776,6 +2943,43 @@ impl App {
         self.activate_pane(previous);
         self.finish_pane_focus(active, terminal_input);
         self.status("swapped pane contents");
+    }
+
+    /// Lays the active pane along one whole side of the layout, spanning
+    /// everything else, the way Vim's `Ctrl-w H/J/K/L` do.
+    ///
+    /// Unlike `swap-window` this reshapes the split tree, and the pane carries
+    /// its identity with it: selections, folds, history and a terminal session
+    /// stay with the content, which is what keeps focus where it was.
+    pub(super) fn move_pane_to_edge(&mut self, axis: Axis, edge: Edge) {
+        if let Some(maximized) = self.maximized {
+            self.action_failed(format!(
+                "{} keeps the current pane maximized",
+                maximized.view.label()
+            ));
+            return;
+        }
+        if matches!(self.layout, Layout::Pane(_)) {
+            self.status("only one pane");
+            return;
+        }
+        let side = super::pane_drag::edge_name(axis, edge);
+        if self.layout.move_to_edge(self.active_pane, axis, edge) {
+            self.status(format!("moved pane to the {side} edge"));
+        } else {
+            self.status(format!("pane already spans the {side} edge"));
+        }
+    }
+
+    /// Splits `target` in two and moves the active pane into its `edge` half.
+    pub(super) fn move_pane_beside(&mut self, target: usize, axis: Axis, edge: Edge) {
+        if self
+            .layout
+            .move_beside(self.active_pane, target, axis, edge)
+        {
+            let side = super::pane_drag::edge_name(axis, edge);
+            self.status(format!("moved pane into the {side} half of another pane"));
+        }
     }
 
     pub(super) fn only_window(&mut self) {
@@ -3143,5 +3347,252 @@ impl App {
             if delta.unsigned_abs() == 1 { "" } else { "s" }
         ));
         Ok(())
+    }
+}
+
+impl App {
+    pub(super) fn handle_media_command(&mut self, command: crate::command::EditorCommand) -> bool {
+        use crate::{
+            command::EditorCommand as C,
+            media::{ViewAction as A, ViewRequest},
+        };
+        if self.active_terminal().is_some() {
+            return false;
+        }
+        let Some(path) = self.active_buffer().media_path.clone() else {
+            return false;
+        };
+        let pdf = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"));
+        if self.active().shows_pdf_pages() {
+            match command {
+                C::MediaShowPage => {
+                    self.active_mut().pdf_page_list = None;
+                    self.mode = Mode::Normal;
+                }
+                C::MediaBack => {
+                    if self.mode == Mode::Select {
+                        self.mode = Mode::Normal;
+                        let head = self.active().selection.primary().head;
+                        self.active_mut().replace_selection(Selection::point(head));
+                        return true;
+                    }
+                    if let Err(error) = self.open_active_directory_explorer() {
+                        self.action_failed(error.to_string());
+                    }
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        if pdf
+            && matches!(
+                command,
+                C::PageDown | C::PageUp | C::HalfPageDown | C::HalfPageUp
+            )
+        {
+            let next = matches!(command, C::PageDown | C::HalfPageDown);
+            self.motion(if next {
+                super::Motion::Down
+            } else {
+                super::Motion::Up
+            });
+            return true;
+        }
+        if pdf
+            && !self.native_media
+            && matches!(
+                command,
+                C::MediaMoveUp | C::MoveUp | C::MediaMoveDown | C::MoveDown
+            )
+        {
+            self.motion(if matches!(command, C::MediaMoveDown | C::MoveDown) {
+                super::Motion::Down
+            } else {
+                super::Motion::Up
+            });
+            return true;
+        }
+        let action = match command {
+            C::MediaZoomIn => A::ZoomIn,
+            C::MediaZoomOut => A::ZoomOut,
+            C::MediaFit => A::Fit,
+            C::MediaActualSize => A::ActualSize,
+            C::EnterSelectMode => {
+                self.toggle_select_mode();
+                if self.mode != Mode::Select {
+                    return true;
+                }
+                A::BeginSelection
+            }
+            C::MoveLeft if self.mode == Mode::Select => A::ExtendLeft,
+            C::MoveRight if self.mode == Mode::Select => A::ExtendRight,
+            C::MediaMoveUp | C::MoveUp if self.mode == Mode::Select => A::ExtendUp,
+            C::MediaMoveDown | C::MoveDown if self.mode == Mode::Select => A::ExtendDown,
+            C::MediaPanLeft | C::MoveLeft => A::PanLeft,
+            C::MediaPanRight | C::MoveRight => A::PanRight,
+            C::ScrollViewUp => A::PanUp,
+            C::ScrollViewDown => A::PanDown,
+            C::MediaMoveUp | C::MoveUp => A::MoveUp,
+            C::MediaMoveDown | C::MoveDown => A::MoveDown,
+            C::AlignViewCenter | C::AlignViewMiddle => A::Center,
+            C::MediaCopySelection => A::CopySelection,
+            C::MediaBack => {
+                self.mode = Mode::Normal;
+                A::Back
+            }
+            C::MediaSelectAll => A::SelectAll,
+            _ => return false,
+        };
+        if !self.native_media {
+            if action == A::Back
+                && let Err(error) = self.open_active_directory_explorer()
+            {
+                self.action_failed(error.to_string());
+            }
+            return true;
+        }
+        if self.media_requests.len() < 256 {
+            self.media_requests.push_back(ViewRequest {
+                pane: self.active_pane,
+                path,
+                page: self
+                    .active_buffer()
+                    .position_of(self.active().selection.primary().head)
+                    .row
+                    + 1,
+                action,
+            });
+        }
+        true
+    }
+}
+
+impl App {
+    /// Native media pointer events focus their explicit document without
+    /// treating pixel coordinates as rows in the PDF's page projection.
+    pub fn navigate_native_media(&mut self, pane: usize, path: &Path, delta: i32) {
+        if self.has_input_overlay() || self.mode == Mode::Command {
+            return;
+        }
+        let Some(target) = self.panes.get(&pane) else {
+            return;
+        };
+        if target.shows_pdf_pages()
+            || target.terminal.is_some()
+            || self.buffers[target.buffer].media_path.as_deref() != Some(path)
+        {
+            return;
+        }
+        self.activate_pane_from_pointer(pane);
+        let rows = self.active_buffer().text().len_lines();
+        let position = self
+            .active_buffer()
+            .position_of(self.active().selection.primary().head)
+            .row;
+        let row = position
+            .saturating_add_signed(delta as isize)
+            .min(rows.saturating_sub(1));
+        if delta != 0 {
+            let offset = self.active_buffer().text().line_to_offset(row);
+            self.active_mut()
+                .replace_selection(Selection::point(offset));
+        }
+    }
+}
+
+impl App {
+    /// The native frontend calls this only after Escape found no pixel/text selection.
+    /// Validate the captured preview so queued events cannot navigate another document.
+    pub fn leave_native_media(&mut self, pane: usize, path: &Path, page: usize) {
+        if self.has_input_overlay() || self.mode == Mode::Command || self.active_pane != pane {
+            return;
+        }
+        let target = self.active();
+        let buffer = self.active_buffer();
+        if target.shows_pdf_pages()
+            || target.terminal.is_some()
+            || buffer.media_path.as_deref() != Some(path)
+            || buffer.position_of(target.selection.primary().head).row + 1 != page
+        {
+            return;
+        }
+        self.mode = Mode::Normal;
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+        {
+            self.active_mut().pdf_page_list = Some(self.active().buffer);
+        } else if let Err(error) = self.open_active_directory_explorer() {
+            self.action_failed(error.to_string());
+        }
+    }
+}
+
+impl App {
+    /// Retained page metadata can attach to a reopened PDF without rerendering it.
+    pub fn update_native_media_pages(&mut self, path: &Path, pages: usize) {
+        if !(1..=10_000).contains(&pages) {
+            return;
+        }
+        let first = format!("Page 1 of {pages}");
+        let mut changed = Vec::new();
+        for (id, buffer) in self.buffers.iter_mut().enumerate() {
+            if self.closed_buffers.contains(&id)
+                || buffer.media_path.as_deref() != Some(path)
+                || (buffer.text().len_lines() == pages
+                    && buffer.text().line_string(0).trim_end() == first)
+            {
+                continue;
+            }
+            let text = (1..=pages)
+                .map(|page| format!("Page {page} of {pages}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let previous = buffer.text().clone();
+            buffer.replace_virtual_text(&text);
+            // Page numbers are the stable identity. Changing "of 9" to "of 10"
+            // shifts every subsequent character offset without moving any page.
+            for pane in self.panes.values_mut() {
+                let remap = |range: crate::selection::Range| {
+                    crate::selection::Range::new(
+                        buffer.offset_of(previous.position_of(range.anchor)),
+                        buffer.offset_of(previous.position_of(range.head)),
+                    )
+                };
+                if pane.buffer == id {
+                    pane.replace_selection(pane.selection.transform(remap));
+                }
+                if let Some(saved) = pane.saved_view_positions.get_mut(&id) {
+                    *saved = super::view_position::ViewPosition {
+                        selection: saved.selection.transform(remap),
+                        scroll_row: saved.scroll_row.min(pages - 1),
+                        ..saved.clone()
+                    };
+                }
+            }
+            changed.push(id);
+        }
+        for id in changed {
+            // Only consume a launch position when a pane can display it. A
+            // background PDF keeps it for the next activation instead.
+            if self.panes.values().any(|pane| pane.buffer == id)
+                && let Some(selection) = self.take_pending_launch_selection(id)
+            {
+                for pane in self.panes.values_mut() {
+                    if pane.buffer == id {
+                        pane.replace_selection(selection.clone());
+                    }
+                    if let Some(saved) = pane.saved_view_positions.get_mut(&id) {
+                        *saved = super::view_position::ViewPosition {
+                            selection: selection.clone(),
+                            ..saved.clone()
+                        };
+                    }
+                }
+            }
+            self.normalize_buffer(id);
+        }
     }
 }

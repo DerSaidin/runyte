@@ -11,9 +11,10 @@ use super::{
     FrameGeometry, GeneratedViewIdentity, HelpTopic, ListPurpose, MaximizedView, Mode,
     PICKER_LIST_INTERVAL, PICKER_PROGRESS_INTERVAL, Pane, Path, PickerProgress, Position,
     PreparedPane, PreparedRow, PreparedView, PromptKind, Rect, ResourceKind, Selection,
-    SettingType, Side, StashMutation, adjust_scroll, adjust_scroll_wrapped, diff_projection,
-    fold_hiding_row, is_path_separator, move_projected_start_backward, project_aligned_rows,
-    project_visible_rows, selection_for_launch_position,
+    SettingType, Side, StashMutation, adjust_horizontal_scroll, adjust_scroll,
+    adjust_scroll_wrapped, diff_projection, fold_hiding_row, is_path_separator,
+    move_projected_start_backward, project_aligned_rows, project_visible_rows,
+    selection_for_launch_position,
 };
 use crate::keymap::{ActionContext, ContextAction};
 use std::collections::HashSet;
@@ -123,6 +124,17 @@ impl App {
     }
 
     pub(super) fn take_pending_launch_selection(&mut self, buffer: usize) -> Option<Selection> {
+        let document = &self.buffers[buffer];
+        if document.media_path.as_ref().is_some_and(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+        }) && document.text().len_lines() == 1
+            && document.text().line_string(0) == "Page 1"
+        {
+            // The initial PDF projection has no page count yet. Clamping here
+            // would discard any requested page beyond the placeholder.
+            return None;
+        }
         let position = self.launch_positions.remove(&buffer)?;
         Some(selection_for_launch_position(
             &self.buffers[buffer],
@@ -371,24 +383,8 @@ impl App {
     pub fn prepare_view(&mut self, geometry: FrameGeometry) -> PreparedView {
         self.poll_diff_work();
         self.settle_background_notifications();
-        if !self.plugins.instances.is_empty() {
-            self.plugins.presented_views.clear();
-            for (&pane_id, pane) in &self.panes {
-                if pane.terminal.is_none() {
-                    for instance in self.plugins.instances.values() {
-                        if let Some(view) = instance
-                            .application
-                            .views
-                            .values()
-                            .find(|view| view.buffer == pane.buffer)
-                        {
-                            self.plugins
-                                .presented_views
-                                .insert(pane_id, (view.buffer, view.revision));
-                        }
-                    }
-                }
-            }
+        if !self.plugins.deferred_presentation {
+            self.plugins.presented_views = self.plugin_view_presentation();
         }
         let (geometry, session_strip) = self.prepare_session_strip(geometry);
         self.pace_picker_progress();
@@ -635,6 +631,18 @@ impl App {
             let buffer = &self.buffers[buffer_id];
             let pane = self.panes.get_mut(&pane_id).unwrap();
             pane.wrap_width = document_text_width;
+            // Effective wrapping is per pane: config edits affect every pane,
+            // while diff panes and documents ineligible for wrapping stay put.
+            let wrap_changed = pane
+                .prepared_soft_wrap
+                .is_some_and(|previous| previous != soft_wrap);
+            pane.prepared_soft_wrap = Some(soft_wrap);
+            let reset =
+                pane.horizontal_reset.take() == Some((pane.buffer, pane.binding_generation));
+            if wrap_changed || reset {
+                pane.scroll_col = 0;
+                pane.horizontal_check = None;
+            }
             if soft_wrap && folds.is_empty() {
                 adjust_scroll_wrapped(
                     pane,
@@ -662,13 +670,8 @@ impl App {
                 pane.scroll_col = 0;
             } else {
                 pane.scroll_wrap = 0;
-                adjust_scroll(
-                    pane,
-                    cursor,
-                    body_height,
-                    document_text_width,
-                    scroll_offset,
-                );
+                adjust_scroll(pane, cursor, body_height, scroll_offset);
+                adjust_horizontal_scroll(pane, buffer, cursor, document_text_width, tab_width);
             }
             if let Some(fold) = fold_hiding_row(&folds, pane.scroll_row) {
                 pane.scroll_row = fold.anchor_row;
@@ -937,6 +940,13 @@ impl App {
         if self.active_terminal().is_some() {
             return BindingScope::Terminal;
         }
+        if self.active_buffer().media_path.is_some() {
+            return if self.active().shows_pdf_pages() {
+                BindingScope::PdfPages
+            } else {
+                BindingScope::Media
+            };
+        }
         if let Some(GeneratedViewIdentity::Plugin { owner, view }) =
             self.active_buffer().generated_view_identity()
             && self
@@ -1025,16 +1035,20 @@ impl App {
             plugin.as_ref(),
             |target| self.plugin_binding_description(target).map(str::to_owned),
         );
+        let mut text = document.text().to_owned();
+        if self.native_media {
+            text.push_str(&crate::keymap::native_window::help());
+        }
         let existing = self.buffers.iter().enumerate().find_map(|(index, buffer)| {
             (!self.closed_buffers.contains(&index) && buffer.is_help()).then_some(index)
         });
         let buffer = match existing {
             Some(existing) => {
-                self.buffers[existing].replace_virtual_text(document.text());
+                self.buffers[existing].replace_virtual_text(&text);
                 existing
             }
             None => {
-                self.buffers.push(Buffer::help(document.text()));
+                self.buffers.push(Buffer::help(&text));
                 self.syntax.push(None);
                 self.buffers.len() - 1
             }
@@ -1115,6 +1129,92 @@ impl App {
         self.generated_highlights_revision = self.generated_highlights_revision.wrapping_add(1);
     }
 
+    /// Dismiss only the capture the frontend actually displayed.
+    pub fn dismiss_document_preview(&mut self, pane: usize, generation: u64) -> bool {
+        if !self
+            .document_previews
+            .get(&pane)
+            .is_some_and(|capture| capture.generation == generation)
+        {
+            return false;
+        }
+        self.document_previews.remove(&pane);
+        self.visible_pane_snapshots.borrow_mut().clear();
+        true
+    }
+
+    /// Capture selected text, or the complete buffer, for the native preview.
+    pub(super) fn preview_document(&mut self) {
+        if !self.native_media {
+            self.action_failed(crate::cli::edition::PREVIEW_WINDOW);
+            return;
+        }
+        let source = self.active().buffer;
+        if self.active().terminal.is_some() || self.buffers[source].media_path.is_some() {
+            self.action_failed(":preview requires a text buffer");
+            return;
+        }
+        let spans = self
+            .operative_spans()
+            .into_iter()
+            .zip(self.active().selection.ranges())
+            .filter_map(|(span, range)| (!range.is_empty()).then_some(span))
+            .collect::<Vec<_>>();
+        let (text, selection_only) =
+            match crate::document_preview::capture(&self.buffers[source], &spans) {
+                Ok(capture) => capture,
+                Err(error) => {
+                    self.action_failed(error);
+                    return;
+                }
+            };
+        let mut language = super::buffer_language(&self.buffers[source], &self.registry)
+            .map(|id| self.registry.language_name(id).to_owned())
+            .unwrap_or_else(|| {
+                if self.scratch_reads_as_markdown(source) {
+                    "markdown"
+                } else {
+                    "text"
+                }
+                .into()
+            });
+        if language == "xml"
+            && self.buffers[source]
+                .path
+                .as_ref()
+                .is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")))
+        {
+            language = "svg".into();
+        }
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        // Retain at most eight captures; engine state belongs exclusively to the frontend.
+        if self.document_previews.len() >= 8
+            && !self.document_previews.contains_key(&self.active_pane)
+            && let Some(oldest) = self
+                .document_previews
+                .iter()
+                .min_by_key(|(_, p)| p.generation)
+                .map(|(id, _)| *id)
+        {
+            self.document_previews.remove(&oldest);
+        }
+        self.document_previews.insert(
+            self.active_pane,
+            crate::document_preview::DocumentPreview {
+                generation: self.preview_generation,
+                source,
+                text,
+                selection_only,
+                language,
+                path: self.buffers[source].path.clone(),
+            },
+        );
+        self.visible_pane_snapshots.borrow_mut().clear();
+        self.status(
+            "Preview: Escape returns to source; drag selects; Ctrl-Shift-c copies; wheel scrolls",
+        );
+    }
+
     /// Shows the active Markdown document as formatted text, or returns from
     /// such a page to the document it was rendered from.
     ///
@@ -1156,11 +1256,25 @@ impl App {
             self.action_failed("not a Markdown document");
             return;
         }
+        self.show_markdown_page();
+    }
+
+    /// Renders the active Markdown document and shows its page in the active
+    /// pane, with the caret on the text the source caret was on.
+    fn show_markdown_page(&mut self) {
+        let active = self.active().buffer;
         // The page is rendered from the buffer rather than from the file, so it
         // shows the work in progress rather than the last thing saved.
         let rendered = crate::markdown::render(&self.buffers[active].to_string());
         let source_offset = self.active().head();
         let offset = rendered.positions.to_page(source_offset);
+        // Another pane can be reading the page this regenerates.
+        let existing = self.buffers.iter().enumerate().find_map(|(page, buffer)| {
+            (!self.closed_buffers.contains(&page)
+                && buffer.markdown_render_source() == Some(active))
+            .then_some(page)
+        });
+        let readers = existing.map(|page| self.markdown_page_readers(page));
         // Named the way every other generated view is: the pane title says
         // what the page is, and a file's directory is not part of that. A
         // pathless buffer is named by its display name with the brackets
@@ -1188,13 +1302,11 @@ impl App {
             rendered.text(),
             ContentAlignment::default(),
         );
-        self.generated_highlights
-            .insert(buffer, rendered.spans().to_vec());
-        self.generated_highlights_revision = self.generated_highlights_revision.wrapping_add(1);
+        self.install_markdown_render(buffer, rendered);
+        if let Some(readers) = readers {
+            self.restore_markdown_page_readers(buffer, readers);
+        }
         let revision = self.buffers[buffer].revision();
-        self.buffers[buffer].wrap_cache.tables =
-            crate::table_layout::Tables::new(revision, rendered.tables);
-        self.markdown_positions.insert(buffer, rendered.positions);
         self.active_mut().markdown_origin = Some(super::MarkdownOrigin {
             source: active,
             source_offset,
@@ -1206,6 +1318,150 @@ impl App {
         self.active_mut().preserve_scroll = false;
         let message = self.key_text(crate::key_spelling::actionable::MARKDOWN_SOURCE);
         self.status(message);
+    }
+
+    /// Attaches what rendering produced besides the text to the page holding
+    /// it: the colour spans, the table geometry, and the map back to the
+    /// source. The tables are keyed to the page's current revision, so this
+    /// runs after the text is in place, and the source is unchanged since it
+    /// was rendered.
+    fn install_markdown_render(
+        &mut self,
+        page: usize,
+        rendered: crate::markdown::RenderedMarkdown,
+    ) {
+        self.generated_highlights
+            .insert(page, rendered.spans().to_vec());
+        self.generated_highlights_revision = self.generated_highlights_revision.wrapping_add(1);
+        let revision = self.buffers[page].revision();
+        self.buffers[page].wrap_cache.tables =
+            crate::table_layout::Tables::new(revision, rendered.tables);
+        self.markdown_positions.insert(page, rendered.positions);
+        self.note_markdown_rendered_from(page);
+    }
+
+    fn note_markdown_rendered_from(&mut self, page: usize) {
+        if let Some(source) = self.buffers[page].markdown_render_source() {
+            self.markdown_rendered_from
+                .insert(page, self.buffers[source].revision());
+        }
+    }
+
+    /// Where each pane showing `page` is, as a source offset. A source offset
+    /// survives regenerating the page, which a page offset does not.
+    fn markdown_page_readers(&self, page: usize) -> Vec<(usize, usize)> {
+        let Some(positions) = self.markdown_positions.get(&page) else {
+            return Vec::new();
+        };
+        self.panes
+            .iter()
+            .filter(|(_, pane)| pane.buffer == page)
+            .map(|(id, pane)| (*id, positions.to_source(pane.head())))
+            .collect()
+    }
+
+    fn restore_markdown_page_readers(&mut self, page: usize, readers: Vec<(usize, usize)>) {
+        let Some(positions) = self.markdown_positions.get(&page) else {
+            return;
+        };
+        for (id, source_offset) in readers {
+            let offset = positions.to_page(source_offset);
+            if let Some(pane) = self.panes.get_mut(&id) {
+                pane.replace_selection(Selection::point(offset));
+                pane.preserve_scroll = false;
+            }
+        }
+    }
+
+    /// Brings a rendered page up to date with its document when a pane
+    /// arrives at it from history or the buffer list rather than through `?`.
+    ///
+    /// A page is otherwise rendered only when it is asked for, so arriving at
+    /// it after an edit would show text the document no longer has. Panes
+    /// already reading it keep their place through the source offset their
+    /// caret corresponds to.
+    pub(super) fn refresh_markdown_page(&mut self, page: usize) {
+        let Some(source) = self.buffers[page].markdown_render_source() else {
+            return;
+        };
+        if self.closed_buffers.contains(&source)
+            || self.markdown_rendered_from.get(&page) == Some(&self.buffers[source].revision())
+        {
+            return;
+        }
+        let rendered = crate::markdown::render(&self.buffers[source].to_string());
+        if self.buffers[page].to_string() == rendered.text() {
+            // The same text can still carry different emphasis. Freshly
+            // rendered positions are exact where mapped ones are nearest, and
+            // replacing them leaves drawing alone.
+            if self
+                .generated_highlights
+                .get(&page)
+                .is_some_and(|spans| spans.as_slice() == rendered.spans())
+            {
+                self.markdown_positions.insert(page, rendered.positions);
+                self.note_markdown_rendered_from(page);
+            } else {
+                self.install_markdown_render(page, rendered);
+            }
+            return;
+        }
+        let readers = self.markdown_page_readers(page);
+        self.buffers[page].replace_virtual_text(rendered.text());
+        self.install_markdown_render(page, rendered);
+        self.restore_markdown_page_readers(page, readers);
+    }
+
+    /// The rendered page this pane showed more recently than `source` itself.
+    ///
+    /// The pane's buffer history already orders everything it has shown, so
+    /// it answers which of the two it last left without a second record that
+    /// could disagree with it. Closing the page removes it from that history,
+    /// which is what makes closing it a return to the source.
+    fn remembered_markdown_page(&self, source: usize) -> Option<usize> {
+        self.active()
+            .buffer_history
+            .iter()
+            .rev()
+            .find_map(|&shown| {
+                if shown == source {
+                    Some(None)
+                } else if !self.closed_buffers.contains(&shown)
+                    && self.buffers[shown].markdown_render_source() == Some(source)
+                {
+                    Some(Some(shown))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    }
+
+    /// Shows the rendered page of the document the active pane has just
+    /// opened by name, when that page is how the pane last showed it.
+    ///
+    /// `was_showing` is the buffer the pane held before opening, so asking
+    /// for the source a pane is already showing leaves it there.
+    pub(super) fn resume_markdown_page(&mut self, was_showing: usize) {
+        let source = self.active().buffer;
+        if source == was_showing
+            || self.active().terminal.is_some()
+            || self.remembered_markdown_page(source).is_none()
+            || !self.is_markdown_document(source)
+        {
+            return;
+        }
+        // The source was passed through on the way to the page rather than
+        // visited, so jumping back and the previous destination lead to where
+        // the person came from. The buffer history keeps it, so closing the
+        // page falls back to its document.
+        let pane = self.active();
+        let jumps = pane.jumps.clone();
+        let destinations = pane.destination_history.clone();
+        self.show_markdown_page();
+        let pane = self.active_mut();
+        pane.jumps = jumps;
+        pane.destination_history = destinations;
     }
 
     /// Whether a buffer holds a Markdown document Runyte can render.
@@ -1237,6 +1493,83 @@ impl App {
     /// that closes an overlay cannot also produce a normal-mode key hint.
     pub fn has_input_overlay(&self) -> bool {
         self.plugins.input.is_some() || self.has_native_input_overlay()
+    }
+
+    pub(crate) fn plugin_view_presentation(
+        &self,
+    ) -> std::collections::BTreeMap<usize, (usize, u64)> {
+        if self.plugins.instances.is_empty() {
+            return Default::default();
+        }
+        self.panes
+            .iter()
+            .filter(|(_, pane)| pane.terminal.is_none())
+            .filter_map(|(&pane_id, pane)| {
+                self.plugins.instances.values().find_map(|instance| {
+                    instance
+                        .application
+                        .views
+                        .values()
+                        .find(|view| view.buffer == pane.buffer)
+                        .map(|view| (pane_id, (view.buffer, view.revision)))
+                })
+            })
+            .collect()
+    }
+
+    /// Whether this input can commit a native decision. Editing a form and
+    /// moving its selection remain queueable while an asynchronous frontend
+    /// catches up; accepting the decision requires its current painted frame.
+    pub fn input_requires_presented_approval(&self, input: &crate::input::InputEvent) -> bool {
+        use crate::input::{InputEvent, KeyCode, Modifiers};
+
+        let pending = self.context_overlay_active()
+            || self.plugins.input.is_some()
+            || self.plugins.provider_reload.is_some()
+            || self.plugins.provider_overwrite.is_some()
+            || self.fs_confirmation.is_some()
+            || self.directory_tree_delete.is_some()
+            || self.merge_ui.review.is_some()
+            || self.confirmation_overlay().is_some()
+            || self
+                .terminal_action_menu
+                .as_ref()
+                .is_some_and(|menu| menu.close_armed)
+            || self
+                .session_action_menu
+                .as_ref()
+                .is_some_and(|menu| menu.force_armed)
+            || (self.list.is_some()
+                && self
+                    .list_actions
+                    .iter()
+                    .any(|action| matches!(action, super::ListAction::LspTrust { .. })));
+        if !pending {
+            return false;
+        }
+        let InputEvent::Key(key) = input else {
+            return matches!(input, InputEvent::Pointer(_));
+        };
+        if let Some(review) = &self.merge_ui.review {
+            // Merge approval uses configured bindings. Only the editing keys
+            // consumed before that registry lookup can bypass presentation.
+            return !(review.input_focused()
+                && match key.code {
+                    KeyCode::Char(_) => {
+                        key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT
+                    }
+                    KeyCode::Backspace | KeyCode::Delete | KeyCode::Left | KeyCode::Right => true,
+                    _ => false,
+                });
+        }
+        if key.code == KeyCode::Escape {
+            return false;
+        }
+        key.code == KeyCode::Enter
+            || (self.directory_tree_delete.is_some()
+                && matches!(key.code, KeyCode::Char('y' | 'Y')))
+            || (self.fs_confirmation.is_some() && key.code == KeyCode::Char('P'))
+            || (self.context_overlay_active() && key.code == KeyCode::Char('x'))
     }
 
     pub(crate) fn has_native_input_overlay(&self) -> bool {

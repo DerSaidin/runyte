@@ -8,13 +8,13 @@ or uninstrumented external programs.
 The canonical command is:
 
 ```sh
-cargo llvm-cov --locked --workspace
+cargo llvm-cov --locked --package runyte
 ```
 
 ## Target measure
 
 Native Windows Phase 1 adds a required MSVC build/lint/test job. Its coverage is
-provisional: no native Windows `cargo llvm-cov --locked --workspace` baseline has
+provisional: no native Windows `cargo llvm-cov --locked --package runyte` baseline has
 been measured. The coverage badge and 89% enforced floor continue to describe
 Linux and macOS. Windows tests do not replace either existing coverage gate.
 
@@ -73,6 +73,26 @@ Adding a platform job does not establish a new measured baseline until that job
 has passed. The floor is deliberately below
 the observed baseline because conditional Linux and macOS code changes both the
 instrumented denominator and the paths available to a run on one platform.
+
+## 2026-10-08 — native window follow-up
+
+Measured on `x86_64-unknown-linux-gnu` with the implementation through `2d85e47`,
+Rust 1.97.1 and cargo-llvm-cov 0.9.1, using the canonical
+`cargo llvm-cov --locked --workspace` command and local socket/process access for
+integration fixtures.
+
+| Measure | Covered | Total | Coverage |
+| --- | ---: | ---: | ---: |
+| Lines | 148,961 | 161,802 | 92.06% |
+| Functions | 13,434 | 14,599 | 92.02% |
+| Regions | 227,915 | 248,765 | 91.62% |
+
+The full ordinary and instrumented suites passed. Default and native all-target
+Clippy passed with warnings denied, and formatting passed. The native binary
+suite separately passed 115 tests with three ignored; the ignored real-Poppler
+rasterization check was also run and passed. Native-only frontend code is not
+part of the canonical default-feature coverage denominator. The 89% floor is
+unchanged. macOS coverage was not rerun in this Linux environment.
 
 ## 2026-10-03 — exp reliability and performance review
 
@@ -1534,3 +1554,87 @@ coverage. Some inline test code is therefore part of both the instrumented
 denominator and the covered count. This baseline is useful for regression
 detection within the same setup, but its percentage should not be read as the
 share of production-only source that tests execute.
+
+
+## 2026-10-07 — native-window experiment
+
+Linux canonical `cargo llvm-cov --locked --workspace` (with summary output and
+four concurrent test threads) reports 92.01% lines: 148,278 covered of 161,158.
+The 89% floor is unchanged. The default-feature suite includes the media command
+and asynchronous presentation-boundary regressions. Optional GPUI rendering is
+validated separately by native adapter tests and the real-window acceptance
+harness; this number does not claim instrumented GUI coverage.
+
+## 2026-10-08 — native-window persistent sessions
+
+Linux `x86_64-unknown-linux-gnu`, Rust 1.97.1, cargo-llvm-cov 0.9.1:
+`cargo llvm-cov --locked --workspace --summary-only` with four concurrent test
+threads reports 92.04% total line coverage (148,717 covered of 161,582).
+The 89% floor is unchanged. Default-feature host tests exercise media capability
+handoff, retained projections, and parent-context waits across detach. Optional
+native adapter tests and isolated X11 window acceptance separately cover media
+presentation, attachment generations, session switching, and close behavior.
+This measurement does not claim native GUI or macOS coverage.
+
+## 2026-10-10 — explicit terminal package
+
+The workspace preparation changes the canonical selector from `--workspace`
+to `--package runyte`. On Linux x86-64 with Rust 1.97.1 and cargo-llvm-cov
+0.9.1, both complete instrumented suites passed. Independent runs measured
+150,015/163,044 lines (92.01%) and 150,025/163,044 (92.02%), respectively.
+The ten-line execution variation was in asynchronous/process paths. Reporting
+both selectors with `--no-run` against the same retained profiles, without
+rebuilding, produced exactly identical reports: all 261 file/total rows,
+including 150,025/163,044 lines. Package selection changes no measured source.
+The enforced terminal floor remains 89%.
+
+## 2026-10-10 — desktop edition baseline
+
+Linux x86-64, Rust 1.97.1, cargo-llvm-cov 0.9.1:
+
+```sh
+cargo llvm-cov --locked --package runyte-native --package runyte-desktop \
+  --ignore-filename-regex "$PWD/src/" --summary-only
+```
+
+The absolute root-source exclusion keeps the shared terminal/editor library
+out of the desktop report. The measured files belong only to the two desktop
+crates. The ordinary suite passes with 87 adapter tests and three existing
+ignored tests; real-window and PDF acceptance run separately.
+
+| Measure | Covered | Total | Coverage |
+| --- | ---: | ---: | ---: |
+| Lines | 2,297 | 5,255 | 43.71% |
+| Functions | 251 | 503 | 49.90% |
+| Regions | 3,480 | 8,022 | 43.38% |
+
+The initial desktop line floor is 40%: three percentage points below the
+baseline, rounded down. It measures unit-tested desktop code; GPU interaction
+and subprocess engine acceptance are not instrumented by this command. The
+terminal package separately measures 150,030/163,044 lines (92.02%), and its
+89% floor is unchanged. Adding preview to the desktop measurement may raise
+the desktop floor, but must not lower it.
+
+The [Linux desktop CI run](https://github.com/runyte/runyte/actions/runs/38059742091/job/114235446250)
+on `73dad43` uses cargo-llvm-cov 0.9.0, supported by the pinned installer
+action. It measures 2,295/5,255 lines (43.67%), with the same source denominator
+and the 40% floor passing. Both Linux and macOS desktop acceptance jobs pass.
+
+## 2026-10-10 — desktop preview integration
+
+The editions Phase 4 shared executable adds `runyte-preview` and real child-process
+helper integration tests to the desktop selection:
+
+```sh
+cargo llvm-cov --locked --package runyte-native --package runyte-desktop --package runyte-preview \
+  --ignore-filename-regex "$PWD/src/" --summary-only --fail-under-lines 40
+```
+
+Linux x86-64 with Rust 1.97.1 and cargo-llvm-cov 0.9.1 covers 2,880 of 5,889
+lines (**48.90%**). The desktop floor stays **40%**; the terminal package selection
+and its **89%** floor remain separate and unchanged. The preview library's
+rendering paths are exercised through the actual desktop executable in the
+integration suite, including retained frames and one-shot rendering.
+
+The same dependency set's canonical terminal measurement covers 150,018 of
+163,044 lines (**92.01%**), above its unchanged 89% floor.

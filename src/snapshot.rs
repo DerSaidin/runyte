@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     app::{App, MaximizedView, Mode, PreparedPane, PreparedView, PromptKind},
@@ -168,9 +168,14 @@ pub struct EditorSnapshot {
     pub geometry: crate::app::FrameGeometry,
     pub theme: Theme,
     pub terminal_theme_colors: bool,
+    /// Whether `:preview` documents follow `theme` rather than a fixed light page.
+    pub preview_theme_colors: bool,
     pub mode: Mode,
     pub directory_tree: Option<DirectoryTreeSnapshot>,
     pub panes: Vec<PaneSnapshot>,
+    /// The area a pane being Alt-dragged would occupy if it were released
+    /// now, outlined over the panes it would displace.
+    pub pane_drop: Option<Rect>,
     pub status: StatusSnapshot,
     pub session_strip: Option<SessionStripSnapshot>,
 }
@@ -523,9 +528,20 @@ impl EditorSnapshot {
     }
 }
 
+/// A read-only projection whose raster and pixel selection belong to the frontend.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaSnapshot {
+    pub path: std::path::PathBuf,
+    pub page: usize,
+    pub page_buffer: bool,
+    pub pages: usize,
+}
+
 /// One pane's owned title, geometry, viewport anchor, and visible rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaneSnapshot {
+    pub preview: Option<crate::document_preview::DocumentPreview>,
+    pub media: Option<MediaSnapshot>,
     pub pane_id: usize,
     pub area: Rect,
     pub body: Rect,
@@ -847,11 +863,13 @@ impl App {
         let prompt_cursor_column = (self.mode == Mode::Command
             && !matches!(self.prompt_kind, PromptKind::SettingValue(_)))
         .then(|| {
-            self.prompt_prefix()
-                .chars()
-                .chain(self.command.chars().take(self.command_cursor))
-                .map(character_cells)
-                .sum()
+            crate::grapheme::cells(
+                self.prompt_prefix()
+                    .chars()
+                    .chain(self.command.chars().take(self.command_cursor)),
+            )
+            .map(|(_, cells)| cells)
+            .sum()
         });
         let is_prompt =
             matches!(self.prompt_kind, PromptKind::SettingValue(_)) || self.mode == Mode::Command;
@@ -946,8 +964,10 @@ impl App {
                 .map(|strip| strip.snapshot.clone()),
             theme: self.theme.clone(),
             terminal_theme_colors: self.config.editor.terminal_theme_colors,
+            preview_theme_colors: self.config.editor.preview_theme_colors,
             mode: self.mode,
             panes,
+            pane_drop: self.pane_drop_preview(prepared),
             status: StatusSnapshot {
                 mode: self.mode,
                 workspace_number: self.workspace_number,
@@ -1077,6 +1097,8 @@ impl App {
                 && !self.directory_tree.focused
                 && self.jump.is_some();
             return PaneSnapshot {
+                preview: None,
+                media: None,
                 pane_id: prepared.pane_id,
                 area: prepared.area,
                 body: prepared.body,
@@ -1141,6 +1163,17 @@ impl App {
             && !self.directory_tree.focused
             && self.jump.is_some();
         let mut snapshot = PaneSnapshot {
+            preview: self
+                .document_previews
+                .get(&prepared.pane_id)
+                .filter(|p| p.source == prepared.buffer_id)
+                .cloned(),
+            media: buffer.media_path.as_ref().map(|path| MediaSnapshot {
+                path: path.clone(),
+                page: cursor.row + 1,
+                pages: buffer.text().len_lines(),
+                page_buffer: self.panes[&prepared.pane_id].shows_pdf_pages(),
+            }),
             pane_id: prepared.pane_id,
             area: prepared.area,
             body: prepared.body,
@@ -1237,9 +1270,15 @@ impl App {
                         )
                     },
                     |segment| {
-                        segment.end.min(segment.start.saturating_add(
+                        bounded_cluster_end(
+                            buffer
+                                .text()
+                                .line(document_row)
+                                .chars_at(segment.start.min(line_len))
+                                .take(segment.end.saturating_sub(segment.start)),
+                            segment.start,
                             prepared.text_width.saturating_add(ZERO_WIDTH_SCAN_LIMIT),
-                        ))
+                        )
                     },
                 )
                 .min(line_len);
@@ -1688,10 +1727,14 @@ impl App {
                 )
             },
             |segment| {
-                segment.end.min(
-                    segment
-                        .start
-                        .saturating_add(context.text_width.saturating_add(ZERO_WIDTH_SCAN_LIMIT)),
+                bounded_cluster_end(
+                    buffer
+                        .text()
+                        .line(context.row)
+                        .chars_at(segment.start.min(line_len))
+                        .take(segment.end.saturating_sub(segment.start)),
+                    segment.start,
+                    context.text_width.saturating_add(ZERO_WIDTH_SCAN_LIMIT),
                 )
             },
         );
@@ -1708,14 +1751,25 @@ impl App {
             .git_status_count_columns(prepared.buffer_id, context.row)
             .or_else(|| self.git_comparison_count_columns(prepared.buffer_id, context.row));
 
-        for (col, character) in buffer
-            .text()
-            .line(context.row)
-            .chars_at(start_col.min(line_len))
-            .take(end_col.saturating_sub(start_col))
-            .enumerate()
+        for (col, (character, cluster_width)) in crate::grapheme::starts(
+            buffer
+                .text()
+                .line(context.row)
+                .chars_at(start_col.min(line_len))
+                .take(end_col.saturating_sub(start_col)),
+        )
+        .enumerate()
         {
             let col = start_col + col;
+            // A code point that continues a cluster draws with it: its
+            // width was counted on the cluster's first code point, and no
+            // style may change inside one, or a frontend would receive half
+            // an emoji sequence in each of two runs.
+            let Some(cluster_width) = cluster_width else {
+                current.push(character);
+                drawn_end = col + 1;
+                continue;
+            };
             let remaining = visible_end.saturating_sub(visual_col);
             if let Some((label, part)) = label_at(row_start + col) {
                 if remaining == 0 {
@@ -1789,7 +1843,7 @@ impl App {
                 }
                 visual_col += width;
             } else {
-                let width = UnicodeWidthChar::width(character).unwrap_or(0);
+                let width = cluster_width;
                 if width > remaining {
                     break;
                 }
@@ -1939,11 +1993,7 @@ fn push_text_run(runs: &mut Vec<TextRun>, current: &mut String, metadata: TextRu
 }
 
 fn display_cells(text: &str) -> usize {
-    text.chars().map(character_cells).sum()
-}
-
-fn character_cells(character: char) -> usize {
-    UnicodeWidthChar::width(character).unwrap_or(0)
+    crate::grapheme::str_width(text)
 }
 
 /// Finds the bounded character boundary that occupies `cell_limit` cells.
@@ -1957,24 +2007,70 @@ fn visible_character_end(
     tab_width: usize,
 ) -> usize {
     let tab_width = tab_width.max(1);
+    let budget = cell_limit.saturating_add(ZERO_WIDTH_SCAN_LIMIT);
     let mut column = start_column;
     let mut cells = 0_usize;
-    for (scanned, character) in characters.enumerate() {
-        if scanned >= cell_limit.saturating_add(ZERO_WIDTH_SCAN_LIMIT) {
+    let mut scanned = 0_usize;
+    for cluster in crate::grapheme::clusters(characters) {
+        if scanned >= budget {
             break;
         }
-        let width = if character == '\t' {
+        if cluster.width == 0 && cluster.first != '\t' {
+            let taken = scan_cost(cluster).min(budget - scanned);
+            column += taken;
+            scanned += taken;
+            continue;
+        }
+        scanned += 1;
+        let width = if cluster.first == '\t' {
             tab_width - cells % tab_width
         } else {
-            character_cells(character)
+            cluster.width
         };
-        if width > 0 && cells.saturating_add(width) > cell_limit {
+        if cells.saturating_add(width) > cell_limit {
             break;
         }
-        column += 1;
+        column += cluster.chars;
         cells = cells.saturating_add(width);
     }
     column
+}
+
+/// What one cluster costs against a row's scan budget. A visible character
+/// costs one whatever its length, because a row of joined emoji is content
+/// and each cluster is itself bounded. A cluster with no width costs every
+/// code point, so a hostile run of marks stays as cheap to bound as before;
+/// being invisible, it may also be cut anywhere.
+fn scan_cost(cluster: crate::grapheme::Cluster) -> usize {
+    if cluster.width == 0 { cluster.chars } else { 1 }
+}
+
+/// The end of what a wrapped segment shows from `start`, bounded by the same
+/// scan budget as an unwrapped row. A segment already fits its row; this only
+/// bounds one made of nothing but zero-width marks, and never ends inside a
+/// visible character.
+fn bounded_cluster_end(
+    characters: impl Iterator<Item = char>,
+    start: usize,
+    budget: usize,
+) -> usize {
+    let mut end = start;
+    let mut scanned = 0_usize;
+    for cluster in crate::grapheme::clusters(characters) {
+        if scanned >= budget {
+            break;
+        }
+        let cost = scan_cost(cluster);
+        if cluster.width == 0 {
+            let taken = cost.min(budget - scanned);
+            end += taken;
+            scanned += taken;
+        } else {
+            end += cluster.chars;
+            scanned += cost;
+        }
+    }
+    end
 }
 
 fn clip_fragments_to_cells<'a>(
@@ -1984,13 +2080,13 @@ fn clip_fragments_to_cells<'a>(
     let mut width = 0;
     let mut clipped = String::with_capacity(limit);
     for fragment in fragments {
-        for character in fragment.chars() {
-            let next = width + character_cells(character);
+        for cluster in fragment.graphemes(true) {
+            let next = width + crate::grapheme::width(cluster);
             if next > limit {
                 return clipped;
             }
             width = next;
-            clipped.push(character);
+            clipped.push_str(cluster);
         }
     }
     clipped
@@ -2004,8 +2100,8 @@ fn clip_fragment_cell_range(fragment: &str, start: usize, limit: usize) -> Strin
     let end = start.saturating_add(limit);
     let mut position = 0usize;
     let mut clipped = String::with_capacity(limit);
-    for character in fragment.chars() {
-        let width = character_cells(character);
+    for cluster in fragment.graphemes(true) {
+        let width = crate::grapheme::width(cluster);
         let next = position.saturating_add(width);
         if next <= start {
             position = next;
@@ -2019,7 +2115,7 @@ fn clip_fragment_cell_range(fragment: &str, start: usize, limit: usize) -> Strin
         if next > end {
             break;
         }
-        clipped.push(character);
+        clipped.push_str(cluster);
         position = next;
     }
     clipped
@@ -2482,6 +2578,79 @@ mod tests {
             "one cell represents the line-end caret"
         );
         assert_eq!(caret_runs[0].text, "¬");
+    }
+
+    #[test]
+    fn an_emoji_is_drawn_whole_in_one_run_with_its_measured_width() {
+        let shrug = "🤷\u{200D}♀\u{FE0F}";
+        let mut config = Config::default();
+        config.editor.line_numbers = false;
+        let mut app = App::new(config, None).unwrap();
+        app.buffers[0].apply(&Transaction::insert(
+            0,
+            format!("a{shrug}b👨\u{200D}👩\u{200D}👧c"),
+        ));
+        app.panes.get_mut(&0).unwrap().selection = Selection::point(1);
+
+        let snapshot = prepared_snapshot(&mut app, 20, 6);
+        let SnapshotRow::Text(row) = &snapshot.pane(0).unwrap().rows[0] else {
+            panic!("first row is text");
+        };
+        let caret = row
+            .runs
+            .iter()
+            .find(|run| {
+                matches!(
+                    run.kind,
+                    TextRunKind::Text {
+                        role: TextRole::Caret,
+                        ..
+                    }
+                )
+            })
+            .expect("caret run");
+        assert_eq!(caret.text, shrug, "the caret covers the whole emoji");
+        let text = row
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>();
+        assert!(text.starts_with(&format!("a{shrug}b👨\u{200D}👩\u{200D}👧c")));
+        // Code-point sums would make this row eleven cells wide.
+        assert_eq!(
+            display_cells(&format!("a{shrug}b👨\u{200D}👩\u{200D}👧c")),
+            7
+        );
+    }
+
+    #[test]
+    fn a_row_of_joined_emoji_is_drawn_to_the_edge_wrapped_or_not() {
+        let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+        for soft_wrap in [false, true] {
+            let mut config = Config::default();
+            config.editor.line_numbers = false;
+            config.editor.soft_wrap = soft_wrap;
+            let mut app = App::new(config, None).unwrap();
+            app.buffers[0].apply(&Transaction::insert(0, family.repeat(80)));
+
+            let snapshot = prepared_snapshot(&mut app, 170, 6);
+            let pane = snapshot.pane(0).unwrap();
+            let SnapshotRow::Text(row) = &pane.rows[0] else {
+                panic!("first row is text");
+            };
+            let drawn = row
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>();
+            let shown = pane.text_width / 2;
+            assert!(
+                drawn.starts_with(&family.repeat(shown.min(80))),
+                "soft wrap {soft_wrap}: {} cells drawn of {}",
+                display_cells(&drawn),
+                pane.text_width
+            );
+        }
     }
 
     #[test]
