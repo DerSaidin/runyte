@@ -165,3 +165,36 @@ fn written_files_load_back_to_the_same_configuration() {
     assert_eq!(loaded.editor.tab_width, 3);
     assert_eq!(loaded.keys, config.keys);
 }
+
+#[test]
+fn explicit_null_theme_roles_survive_writing_inline_and_to_a_theme_file() {
+    let root = Root::new();
+    // Every role whose omission means a default colour rather than null.
+    let nulls = [
+        "warning",
+        "info",
+        "change_added",
+        "change_modified",
+        "change_removed",
+        "diff_added",
+        "diff_removed",
+        "diff_changed",
+    ];
+    let mut source = String::from("themes:\n  mine:\n    accent: '#000001'\n");
+    for role in nulls {
+        source.push_str(&format!("    {role}: null\n"));
+    }
+    let mut config: Config = serde_yaml::from_str(&source).unwrap();
+    config.merge_builtin_defaults();
+    let theme = &config.themes["mine"];
+    assert!(theme.warning.is_none() && theme.diff_added.is_none());
+    assert_ne!(*theme, ThemeDefinition::default());
+
+    let inline: Config = serde_yaml::from_str(&config.to_yaml().unwrap()).unwrap();
+    assert_eq!(inline.themes["mine"], *theme);
+
+    for (relative, text) in config.to_files(Path::new("config.yaml")).unwrap() {
+        root.write(&relative.to_string_lossy(), &text);
+    }
+    assert_eq!(root.load().unwrap().themes["mine"], *theme);
+}

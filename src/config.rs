@@ -656,13 +656,13 @@ pub struct ThemeDefinition {
     pub error: String,
     /// Warning notifications. An omitted value takes the fixed default from
     /// `ThemeDefinition::default`; an explicit null falls back to
-    /// `change_modified`, then terminal yellow.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// `change_modified`, then terminal yellow. Never skipped when written,
+    /// so that null survives a round trip; the same holds for `info` and the
+    /// `change_*` and `diff_*` roles, whose defaults are not null either.
     pub warning: Option<String>,
     /// Informational notifications. An omitted value takes the fixed default
     /// from `ThemeDefinition::default`; an explicit null falls back to
     /// `change_added`, then terminal green.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub info: Option<String>,
     /// A one-key `goto-word` label, or the remaining key after narrowing. An
     /// omitted value uses `error`, preserving themes written before mixed
@@ -682,14 +682,11 @@ pub struct ThemeDefinition {
     /// palette; the bundled themes name a colour that belongs to theirs.
     /// `change_modified` and `change_removed` follow the same rule with
     /// magenta and red.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub change_added: Option<String>,
     /// Gutter mark for a line whose content differs from the staged one.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub change_modified: Option<String>,
     /// Gutter mark for lines that were removed, drawn against the row that
     /// closed over them.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub change_removed: Option<String>,
     /// Line background for a line only the right side of a side-by-side diff
     /// has. Distinct from `change_added`, which is a gutter mark against
@@ -699,14 +696,11 @@ pub struct ThemeDefinition {
     /// `ThemeDefinition::default`. An explicit null leaves the line unfilled
     /// and lets the gutter bar carry the difference on its own;
     /// `diff_removed` and `diff_changed` follow the same rule.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_added: Option<String>,
     /// Line background for a line only the left side of a diff has.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_removed: Option<String>,
     /// Line background for a line that answers to a different line on the
     /// other side.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_changed: Option<String>,
     /// Per-scope syntax colours, keyed by the names in `syntax::SCOPES`.
     /// Unlisted scopes fall back to the theme foreground.
