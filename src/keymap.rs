@@ -2820,6 +2820,23 @@ const FAST_PANE_MOVES: [(char, EditorCommand); 4] = [
     ('l', EditorCommand::FocusWindowRight),
 ];
 
+/// Whether a keystroke leaves Insert mode instead of reaching a terminal.
+///
+/// `Escape` cannot be it: `vim` and `htop` inside the pane need it, and every
+/// agent uses it too. `Ctrl-\\` begins the staged Normal/review transition;
+/// `Ctrl-w` begins the Insert-mode pane-navigation namespace instead.
+pub fn is_terminal_normal_key(key: Key) -> bool {
+    // Two spellings of Ctrl-\\. A terminal implementing the kitty keyboard
+    // protocol reports `Ctrl-\` as the character it is; a legacy one has only
+    // the control byte `0x1c`, which Crossterm decodes as `Ctrl-4` because
+    // that is what the historical table says. Runyte asks for the enhanced
+    // protocol but cannot require it — it is off on macOS entirely — so the
+    // escape hatch has to answer to both or it would be unreachable on the
+    // terminals that need it most.
+    key.modifiers.contains(Modifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('\\') | KeyCode::Char('4'))
+}
+
 /// Whether `key` is one of the single-key pane moves.
 ///
 /// Says nothing about whether the option is on: that is the caller's

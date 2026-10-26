@@ -6410,8 +6410,8 @@ language server, including the built-in ones. Themes and keys go into
 | File | What it holds |
 | --- | --- |
 | `themes.d/<name>.yaml` | Each theme that is not exactly a built-in one. Built-in themes are not written. |
-| `keybinds.d/00-prefixes.yaml` | `leader`, `window`, and `rebind`, when any are set. |
-| `keybinds.d/normal.yaml`, `select.yaml`, `insert.yaml`, `replace.yaml` | Explicit bindings under `bind`, with built-in defaults as commented examples. |
+| `keybinds.d/00-prefixes.yaml` | `leader`, `window`, `rebind`, and `defaults`, when any are set. |
+| `keybinds.d/normal.yaml`, `select.yaml`, `insert.yaml`, `replace.yaml` | Explicit bindings under `bind`, with built-in defaults as commented examples. With `keys.defaults: false`, only the explicit bindings. |
 
 A theme whose name is not a portable file name, or differs from another only
 in letter case, stays inline under `themes:`. The built-in keys left out of
@@ -6769,7 +6769,7 @@ choice by accident.
 
 ## Custom key bindings
 
-The `keys` section changes the keyboard. It has four parts:
+The `keys` section changes the keyboard. It has five parts:
 
 | Key | What it does |
 | --- | --- |
@@ -6777,6 +6777,7 @@ The `keys` section changes the keyboard. It has four parts:
 | `keys.window` | Replaces `Ctrl-w` as the window prefix. |
 | `keys.rebind` | Moves bindings Runyte already ships to other keys. |
 | `keys.bind` | Assigns named actions to keys, per mode. Also removes bindings. |
+| `keys.defaults` | `false` starts `bind` from an empty keyboard instead of Runyte's. See [Without the built-in keys](#without-the-built-in-keys). |
 
 - `keys` is read from the configuration file and from
   [`keybinds.d/`](#themes-and-key-bindings-in-their-own-files) beside it; the
@@ -7013,6 +7014,63 @@ keys:
     normal:
       F2: { command: help, argument: key-actions }
 ```
+
+### Without the built-in keys
+
+Everything above changes Runyte's own keyboard: keys you do not mention keep
+their built-in meaning. Set `keys.defaults: false` to start from an empty one
+instead, so the only keys that do anything are the ones `bind` assigns:
+
+```yaml
+keys:
+  defaults: false
+  bind:
+    normal:
+      ":": open-command-palette
+      i: enter-insert-mode
+      h: move-left
+      l: move-right
+    select:
+      Esc: enter-normal-mode
+    insert:
+      Esc: enter-normal-mode
+      Enter: insert-newline
+      Backspace: delete-char-backward
+    replace:
+      Esc: enter-normal-mode
+```
+
+- **What goes:** every built-in key in Normal, Select, Insert, and Replace
+  modes that `bind` could assign, including the whole leader and window
+  menus, and the keys that only answer with a message about a command Runyte
+  does differently or does not have yet. That includes Insert mode's editing
+  keys: printable characters still type, but `Enter`, `Backspace`, `Delete`,
+  `Tab`, the arrows, `Home`, `End`, and the page keys do nothing until `bind`
+  assigns them.
+- **What stays:** keys that are not yours to assign. Special buffers such as
+  the explorer, Git views, and help keep their own keys; so do lists, prompts,
+  and terminals, which go on answering to the built-in Insert keys, such as
+  `Ctrl-C` to copy and the window menu, as they do whenever `bind` replaces
+  one. `Tab`, which runs a code action, and the count digits stay
+  too, because `bind` cannot use them.
+- **Two exits stay too, unless `bind` reassigns them.** `Ctrl-\` (`Ctrl-4` on
+  legacy terminals) still returns to Normal mode, since inside a terminal
+  `Esc` belongs to the program and `Ctrl-\` is the only way out of its input.
+  With `editor.fast_pane_keys` on, `Ctrl-h`, `Ctrl-j`, `Ctrl-k`, and `Ctrl-l`
+  keep moving between panes.
+- **`rebind` is ignored**, with a message for each entry, since there is no
+  built-in binding left to move. `leader` and `window` still set what `Leader`
+  and `Window` mean in `bind`, and may be keys that only a built-in binding
+  used.
+- **A way out is required.** The keyboard must reach `open-command-palette`
+  in Normal mode and `enter-normal-mode` in Select, Insert, and Replace modes,
+  directly or as one of a sequence of actions. `Ctrl-\` covers the second
+  unless you reassign both of its spellings. Without them you could not leave
+  a mode or reach the configuration to fix it, so Runyte reports what is
+  missing and keeps the built-in keys underneath your `bind` instead.
+
+`:write-config` keeps `defaults: false` and writes only your own keys, without
+the commented built-in examples, since none are underneath.
 
 ### How bindings are resolved
 
