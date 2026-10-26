@@ -7034,25 +7034,40 @@ keys:
       Esc: enter-normal-mode
     insert:
       Esc: enter-normal-mode
+      Enter: insert-newline
+      Backspace: delete-char-backward
     replace:
       Esc: enter-normal-mode
 ```
 
 - **What goes:** every built-in key in Normal, Select, Insert, and Replace
   modes that `bind` could assign, including the whole leader and window
-  menus.
+  menus, and the keys that only answer with a message about a command Runyte
+  does differently or does not have yet. That includes Insert mode's editing
+  keys: printable characters still type, but `Enter`, `Backspace`, `Delete`,
+  `Tab`, the arrows, `Home`, `End`, and the page keys do nothing until `bind`
+  assigns them.
 - **What stays:** keys that are not yours to assign. Special buffers such as
   the explorer, Git views, and help keep their own keys; so do lists, prompts,
-  and terminals. `Tab`, which runs a code action, and the count digits stay
+  and terminals, which go on answering to the built-in Insert keys, such as
+  `Ctrl-C` to copy and the window menu, as they do whenever `bind` replaces
+  one. `Tab`, which runs a code action, and the count digits stay
   too, because `bind` cannot use them.
+- **Two exits stay too, unless `bind` reassigns them.** `Ctrl-\` (`Ctrl-4` on
+  legacy terminals) still returns to Normal mode, since inside a terminal
+  `Esc` belongs to the program and `Ctrl-\` is the only way out of its input.
+  With `editor.fast_pane_keys` on, `Ctrl-h`, `Ctrl-j`, `Ctrl-k`, and `Ctrl-l`
+  keep moving between panes.
 - **`rebind` is ignored**, with a message for each entry, since there is no
   built-in binding left to move. `leader` and `window` still set what `Leader`
-  and `Window` mean in `bind`.
-- **A way out is required.** The `bind` section must reach
-  `open-command-palette` in Normal mode and `enter-normal-mode` in Select,
-  Insert, and Replace modes. Without them you could not leave a mode or reach
-  the configuration to fix it, so Runyte reports what is missing and keeps
-  the built-in keys underneath your `bind` instead.
+  and `Window` mean in `bind`, and may be keys that only a built-in binding
+  used.
+- **A way out is required.** The keyboard must reach `open-command-palette`
+  in Normal mode and `enter-normal-mode` in Select, Insert, and Replace modes,
+  directly or as one of a sequence of actions. `Ctrl-\` covers the second
+  unless you reassign both of its spellings. Without them you could not leave
+  a mode or reach the configuration to fix it, so Runyte reports what is
+  missing and keeps the built-in keys underneath your `bind` instead.
 
 `:write-config` keeps `defaults: false` and writes only your own keys, without
 the commented built-in examples, since none are underneath.
