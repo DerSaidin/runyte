@@ -72,10 +72,10 @@ This project is well tested. Test coverage is about 92% of lines, and CI require
 Every prebuilt release is built natively on its own platform and checked to start.
 
 A few features are missing or work differently on Windows; see
-[Windows support](docs/user-guide.md#windows-support).
+[Windows support](docs/user-guide/install-and-run.md#windows-support).
 
 Website: [runyte.com](https://runyte.com) ·
-Documentation: [user guide](docs/user-guide.md) ·
+Documentation: [user guide](docs/user-guide/README.md) ·
 Changelog: [GitHub Releases](https://github.com/runyte/runyte/releases) ·
 Community: [r/runyte](https://www.reddit.com/r/runyte/)
 
@@ -123,7 +123,7 @@ Use `Space w ...` or `Ctrl-w ...` commands to manage panes. Move the active
 pane to the left/bottom/top/right edge of the layout with `Ctrl-w H/J/K/L`.
 With the mouse, drag shared borders to resize panes, Alt-left-drag inside a
 pane to rearrange it, or Shift-Alt-left-drag to expand it into neighbouring
-panes. See [pane management](docs/user-guide.md#pane-keys) for details.
+panes. See [pane management](docs/user-guide/panes.md#pane-keys) for details.
 
 Use `Space d t` to toggle a narrow directory tree at the left of the editor,
 or `Space d d` to reveal the active file and focus the tree. Enter opens a
@@ -317,9 +317,9 @@ Key sequences show hints. `:tutorial` provides an
 interactive introduction, `Space ?` opens contextual help, and `:help` opens
 the complete manual.
 
-- [User guide and command reference](docs/user-guide.md) (long; an AI agent can search it for you)
+- [User guide and command reference](docs/user-guide/README.md)
 - [Frequently asked questions](docs/faq.md)
-- [Configuration](docs/user-guide.md#configuration) and [example](config.example.yaml)
+- [Configuration](docs/user-guide/configuration.md#configuration) and [example](config.example.yaml)
 - [Language-server setup](docs/lsp/README.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 

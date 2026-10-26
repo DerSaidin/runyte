@@ -878,10 +878,7 @@ mod tests {
     #[test]
     fn without_defaults_the_user_guide_example_is_accepted() {
         // A Windows checkout may convert the guide to CRLF.
-        let guide =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/user-guide.md"))
-                .unwrap()
-                .replace("\r\n", "\n");
+        let guide = crate::manual::USER_GUIDE.replace("\r\n", "\n");
         let section = &guide[guide.find("### Without the built-in keys").unwrap()..];
         let start = section.find("```yaml\n").unwrap() + "```yaml\n".len();
         let example = &section[start..start + section[start..].find("```").unwrap()];

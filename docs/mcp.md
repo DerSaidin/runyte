@@ -64,7 +64,7 @@ The default identity is `agent`. Without Remember, a grant lasts until the
 owning editor or persistent host exits. Private credentials and remembered
 grants stay in Runyte's account cache, outside the project. `RUNYTE_CONTEXT_HOME`
 can select an absolute private store shared by the editor and MCP process.
-See the [user guide](user-guide.md#what-a-grant-covers) for platform locations.
+See the [user guide](user-guide/agent-access-to-workspace-context.md#what-a-grant-covers) for platform locations.
 
 ## Tools
 

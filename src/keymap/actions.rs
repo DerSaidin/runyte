@@ -1043,9 +1043,7 @@ mod tests {
     /// colon commands the registry offers, no more and no fewer.
     #[test]
     fn user_guide_action_reference_matches_the_registry() {
-        let guide =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/user-guide.md"))
-                .expect("read the user guide");
+        let guide = crate::manual::USER_GUIDE;
         let section = guide
             .split_once("### Bindable action reference")
             .expect("user guide has a bindable action reference")
@@ -1059,7 +1057,7 @@ mod tests {
         let stale = documented.difference(&registered).collect::<Vec<_>>();
         assert!(
             missing.is_empty() && stale.is_empty(),
-            "docs/user-guide.md action reference is missing {missing:?} and lists unknown {stale:?}"
+            "docs/user-guide/ action reference is missing {missing:?} and lists unknown {stale:?}"
         );
     }
 }
