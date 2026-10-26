@@ -126,8 +126,14 @@ fn ci_enforces_the_committed_dependency_graph() {
             "gates",
             "cargo clippy --all-targets --locked -- -D warnings",
         ),
-        ("gates", "cargo test --locked"),
-        ("macos", "cargo test --locked"),
+        (
+            "gates",
+            "cargo llvm-cov --locked --package runyte --no-report",
+        ),
+        (
+            "macos",
+            "cargo llvm-cov --locked --package runyte --no-report",
+        ),
         (
             "performance",
             "cargo test --release --locked --test performance -- --ignored --test-threads=1",
@@ -142,12 +148,26 @@ fn ci_enforces_the_committed_dependency_graph() {
         let steps = jobs[serde_yaml::Value::from(job)]["steps"]
             .as_sequence()
             .unwrap();
-        assert!(
-            steps
+        let has_command = steps.iter().any(|step| {
+            if step["run"].as_str() == Some(command) {
+                return true;
+            }
+            if step["uses"].as_str() != Some("./.ci-tools/.github/actions/core-coverage") {
+                return false;
+            }
+            let action = fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(".github/actions/core-coverage/action.yml"),
+            )
+            .unwrap();
+            let action: serde_yaml::Value = serde_yaml::from_str(&action).unwrap();
+            action["runs"]["steps"]
+                .as_sequence()
+                .unwrap()
                 .iter()
-                .any(|step| step["run"].as_str() == Some(command)),
-            "CI job {job} omits locked command: {command}"
-        );
+                .any(|step| step["run"].as_str() == Some(command))
+        });
+        assert!(has_command, "CI job {job} omits locked command: {command}");
     }
 }
 
