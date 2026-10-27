@@ -9,11 +9,15 @@
 
 use std::fmt::Write as _;
 
+/// Complete guide assembled from the ordered chapter index at build time.
+pub const USER_GUIDE: &str = include_str!(concat!(env!("OUT_DIR"), "/user-guide.md"));
+
 use crate::help_document::{HelpDocument, HelpDocumentWriter, HelpRole};
 use crate::keymap::{Keymap, default_keymap};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ManualTopic {
+    Guide,
     GettingStarted,
     Editing,
     MouseAndClipboard,
@@ -32,6 +36,7 @@ pub enum ManualTopic {
 
 impl ManualTopic {
     pub const ALL: &'static [Self] = &[
+        Self::Guide,
         Self::GettingStarted,
         Self::Editing,
         Self::MouseAndClipboard,
@@ -50,6 +55,7 @@ impl ManualTopic {
 
     pub const fn slug(self) -> &'static str {
         match self {
+            Self::Guide => "guide",
             Self::GettingStarted => "getting-started",
             Self::Editing => "editing",
             Self::MouseAndClipboard => "mouse",
@@ -69,6 +75,7 @@ impl ManualTopic {
 
     const fn aliases(self) -> &'static [&'static str] {
         match self {
+            Self::Guide => &["guide", "manual", "reference"],
             Self::GettingStarted => &["start", "getting-started"],
             Self::Editing => &["edit", "editing", "selections"],
             Self::MouseAndClipboard => &["mouse", "pointer", "clipboard"],
@@ -95,6 +102,7 @@ impl ManualTopic {
 
     pub const fn title(self) -> &'static str {
         match self {
+            Self::Guide => "Complete user guide",
             Self::GettingStarted => "Getting started",
             Self::Editing => "Editing and selections",
             Self::MouseAndClipboard => "Mouse and clipboard",
@@ -118,6 +126,9 @@ impl ManualTopic {
 
     const fn body(self) -> &'static str {
         match self {
+            Self::Guide => {
+                "The complete reference is assembled from docs/user-guide/ at build time."
+            }
             Self::KeyActions => {
                 "Action names and eligibility are generated from the command registry."
             }
@@ -200,6 +211,9 @@ pub(crate) fn render_document_for(keymap: &Keymap) -> HelpDocument {
         let _ = writeln!(out, "  {:<20} :help {}", topic.title(), topic.slug());
     }
     for topic in ManualTopic::ALL {
+        if *topic == ManualTopic::Guide {
+            continue;
+        }
         let body = if *topic == ManualTopic::KeyActions {
             crate::keymap::actions::reference()
         } else {
@@ -348,6 +362,9 @@ pub(crate) fn render_document_for(keymap: &Keymap) -> HelpDocument {
         document.mark_token_since(0, literal, HelpRole::Code);
     }
 
+    document.write_prose("\nCOMPLETE USER GUIDE\n\n");
+    document.write_prose(USER_GUIDE);
+    document.mark_since(0, "COMPLETE USER GUIDE", HelpRole::Heading);
     document.finish()
 }
 
@@ -363,6 +380,18 @@ pub fn topic_offset(text: &str, topic: ManualTopic) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_guide_is_embedded_and_has_a_topic() {
+        let rendered = render();
+        assert_eq!(ManualTopic::resolve("reference"), Some(ManualTopic::Guide));
+        let offset = topic_offset(&rendered, ManualTopic::Guide);
+        let guide: String = rendered.chars().skip(offset).collect();
+        assert!(guide.ends_with(USER_GUIDE));
+        assert!(guide.contains("## License"));
+        assert!(guide.contains("### Windows support"));
+        assert!(!USER_GUIDE.contains("<!-- navigation -->"));
+    }
 
     #[test]
     fn authored_key_markers_are_complete_and_resolve_in_both_variants() {

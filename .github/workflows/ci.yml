@@ -277,6 +277,9 @@ jobs:
         with:
           key: plugin-conformance-${{ matrix.os }}
 
+      - name: Check user guide navigation and links
+        run: python3 contrib/check_user_guide.py
+
       - name: Test compatibility gate tools
         run: python3 -m unittest discover -s docs/plugins/compatibility -p 'test_*.py' -v
 

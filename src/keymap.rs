@@ -3575,9 +3575,7 @@ mod tests {
     /// be named exactly somewhere in the table.
     #[test]
     fn user_guide_covers_every_direct_editing_binding() {
-        let guide =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/user-guide.md"))
-                .expect("read the user guide");
+        let guide = crate::manual::USER_GUIDE;
         let editing = guide
             .split_once("### Editing")
             .expect("user guide has an Editing section")
@@ -3614,14 +3612,14 @@ mod tests {
         let missing = missing_from(Mode::Normal, &editing);
         assert!(
             missing.is_empty(),
-            "docs/user-guide.md Editing table is missing direct modal bindings: {}",
+            "docs/user-guide/ Editing table is missing direct modal bindings: {}",
             missing.join(", ")
         );
 
         let missing = missing_from(Mode::Insert, insert);
         assert!(
             missing.is_empty(),
-            "docs/user-guide.md Insert and Replace modes section is missing direct bindings: {}",
+            "docs/user-guide/ Insert and Replace modes section is missing direct bindings: {}",
             missing.join(", ")
         );
 
