@@ -156,9 +156,12 @@ The status line names the one you are in.
 | `ide+mux` | `runyte --mux`, or `runyte -a` | The same workspace kept alive by a local **host** while a **client** provides the terminal interface, so you can detach, reattach, and switch between projects or Git worktrees. |
 | `editor` | `runyte --editor`, or `runed` | Editing files and directories anywhere, with no workspace, Git, language servers, MCP, plugins, or terminals. |
 
-`ide` and `ide+mux` need a workspace: a Git repository, or a directory you
-initialized with `runyte --init DIRECTORY`. Outside one they say so instead of
-starting.
+`ide` and `ide+mux` need a workspace: a Git, Jujutsu, or Subversion working
+copy, or a directory holding a `.runyte/` state directory. Outside one, `ide`
+makes the launch directory a workspace by creating `.runyte/` there, except in
+your home directory, a temporary or shared directory, or the filesystem root,
+or when a file it opens lies elsewhere; `ide+mux` needs one to exist
+already. `runyte --init DIRECTORY` makes any directory a workspace.
 
 Start Runyte in mux mode with:
 
@@ -308,8 +311,9 @@ runyte --editor notes.md  # edit anywhere, without a workspace
 runyte --mux              # open a persistent session in a project
 ```
 
-A workspace is a Git repository or a directory initialized with
-`runyte --init DIRECTORY`. Use `runyte --help` for all command-line options.
+A workspace is a version-control working copy or a directory holding
+`.runyte/`; ide mode creates one in the launch directory when there is none.
+Use `runyte --help` for all command-line options.
 
 ## Help
 
