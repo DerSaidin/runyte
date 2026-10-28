@@ -299,8 +299,8 @@ value as saved, while the editor keeps using the startup value.
 
 **Language servers are reconfigured, not restarted.**
 
-- A server whose `command`, `args`, and `initialization_options` are unchanged
-  keeps its process, handshake, open documents, and diagnostics.
+- A server whose `command`, `args`, `initialization_options`, and `roots` are
+  unchanged keeps its process, handshake, open documents, and diagnostics.
 - A changed definition stops and starts again on the next request.
 - A language removed from the file stops.
 - A remembered launch failure is forgotten when its definition changes, so a
@@ -382,7 +382,7 @@ file-only.
 | `git.refresh_interval_seconds` | `60` | 0–3600 | Bounds automatic Git refresh. `0` turns it off. See [Automatic Git refresh](configuration.md#automatic-git-refresh). |
 | `notifications.history_limit` | `50` | 1–1000 | Newest notifications kept in memory for the workspace. |
 | `lsp.enable` | `true` | boolean | Allow configured language servers to start. Restart required. |
-| `lsp.<language>` | `rust` only | `command`, `args`, `initialization_options` | A language server definition. See [Language servers](language-support.md#language-servers). |
+| `lsp.<language>` | `rust` only | `command`, `args`, `initialization_options`, `roots` | A language server definition. See [Language servers](language-support.md#language-servers). |
 | `theme` | `ocean-dark` | theme name | The active theme. See [Themes](themes.md#themes). |
 
 ### Configuration recipes
@@ -516,11 +516,16 @@ Details:
 
 Runyte finds the workspace directory by walking up from the launch directory:
 
-1. It looks for a Git repository root.
+1. It looks for the nearest Git, Jujutsu, or Subversion working-copy root.
 2. If there is none, it looks for the configured relative state directory
    (`.runyte/` by default).
-3. If neither exists, there is no workspace: ide and mux refuse and suggest
-   `runyte --init DIRECTORY`, and nothing is created. [Editor
+3. If neither exists, an ide launch creates the state directory in the launch
+   directory and uses that as the workspace. It refuses instead in the
+   directories listed under [Finding the
+   workspace](workspaces-and-persistent-sessions.md#starting-a-workspace), for a
+   target outside the launch directory, and whenever `workspace.state` is
+   absolute, since discovery cannot find an absolute state directory again.
+   mux refuses too. Both suggest `runyte --init DIRECTORY`. [Editor
    mode](workspaces-and-persistent-sessions.md#editor-mode) needs no workspace.
 
 `runyte --init DIRECTORY` creates the state directory, so later launches find

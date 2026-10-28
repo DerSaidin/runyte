@@ -308,6 +308,7 @@ lsp:
 | `command` | Executable name or absolute path |
 | `args` | Optional list of arguments. The server is started directly, not through a shell. |
 | `initialization_options` | Optional; passed verbatim as `initializationOptions` |
+| `roots` | Optional list of file names that mark a project root, such as `[pyproject.toml]`. Omitted, the language's built-in markers apply; `[]` roots every server at the workspace. See [Server roots](language-support.md#server-roots). |
 
 **Language keys** are Runyte's language names, so a buffer's language is the
 same question for highlighting and for LSP: `rust`, `python`, `swift`, `c`,
@@ -329,7 +330,7 @@ rejected, apart from `enable` and the `servers` wrapper.
 | Command | Effect |
 | --- | --- |
 | `:config-reload` | Adopt new definitions; restart only languages whose definition changed |
-| `:lsp-restart [language]` | Restart a stopped server from the configuration already loaded. It does not re-read YAML, so it is the wrong command after editing the file. |
+| `:lsp-restart [language]` | Restart a stopped server from the configuration already loaded, or every server of the named language. Each document's [root](language-support.md#server-roots) is found again. It does not re-read YAML, so it is the wrong command after editing the file. |
 | `:lsp-status` (`Space l ?`) | Report servers that started or failed. The report replaces the command's echo while that echo is still current; `:not` keeps the full report. |
 | `:service-health` | Show whether the active document has a configured and attached server |
 
@@ -343,6 +344,48 @@ crashes, or answers slowly never makes the editor wait. Diagnostics from a
 stopped server are dropped rather than left as stale claims. A launch error
 appears in `:lsp-status` after the first start attempt and in the
 notification center.
+
+#### Server roots
+
+A workspace can hold several projects for one language: a Rust crate in one
+directory and another beside it, or a Python package inside a repository
+whose root holds something else. Each document's server is started at the
+root of the project the file belongs to, so the server reads that project's
+`Cargo.toml` or `pyproject.toml`. One server runs per language and root.
+
+The root is found the way Helix finds it. Runyte walks up from the document's
+directory to the workspace root and takes the **top-most** directory holding
+one of the language's marker files, so a member of a Cargo workspace is served
+from the Cargo workspace rather than from its own crate. A document with no
+marker above it, or one outside the workspace, uses the workspace root.
+
+| Language | Built-in markers |
+| --- | --- |
+| `rust` | `Cargo.toml`, `Cargo.lock` |
+| `python` | `pyproject.toml`, `setup.py`, `poetry.lock`, `pyrightconfig.json` |
+| `go` | `go.work`, `go.mod` |
+| `javascript` | `package.json`, `jsconfig.json` |
+| `typescript`, `tsx` | `package.json`, `tsconfig.json` |
+| `swift` | `Package.swift` |
+| `java` | `pom.xml`, `build.gradle`, `build.gradle.kts` |
+| `kotlin` | `settings.gradle`, `settings.gradle.kts` |
+| `lua` | `.luarc.json`, `.luacheckrc`, `.stylua.toml`, `selene.toml`, `.git` |
+| `zig` | `build.zig` |
+| `markdown` | `.marksman.toml` |
+| `dockerfile` | `Dockerfile`, `Containerfile` |
+| `php` | `composer.json`, `index.php` |
+| `elixir` | `mix.exs`, `mix.lock` |
+
+Other languages have none, and their servers run at the workspace root.
+`roots` in a server definition replaces the list; each entry is a single file
+or directory name.
+
+- `:lsp-status` names a server rooted below the workspace with its directory,
+  as in `rust (tools): rust-analyzer (ready)`.
+- A root is looked up once per directory. A marker file created later takes
+  effect after `:lsp-restart` or `:config-reload`.
+- Permission covers the whole workspace, so every root inside it shares the
+  decision below.
 
 #### Permission to run servers
 

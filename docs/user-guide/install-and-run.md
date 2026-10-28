@@ -134,8 +134,11 @@ When one of these fails, recoverable edits are preserved.
 Details:
 
 - **Workspaces.** `runyte FILE` opens the file in the workspace the current
-  directory belongs to. Outside any workspace it refuses and suggests
-  `runyte --init DIRECTORY`; use `runed FILE` to edit without one.
+  directory belongs to. Outside any workspace the current directory becomes
+  one when the file is inside it. In your home directory, a temporary or
+  shared directory, or the filesystem root, or for a file elsewhere, it
+  refuses and suggests `runyte --init DIRECTORY`; use `runed FILE` to edit
+  without one. See [Finding the workspace](workspaces-and-persistent-sessions.md#starting-a-workspace).
 
 - **About page.** A new persistent session starts on the about page too, so
   `runyte -a` before anything has been opened in that workspace shows it.

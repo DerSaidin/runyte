@@ -12,11 +12,13 @@ session keeps its mode until it ends.
 The `mode` setting chooses the mode for launches that give no mode option; it
 is `ide` unless set otherwise. The launch directory never changes the mode.
 
-A **workspace** is one project directory and its editor scope: a Git
-repository, or a directory holding the workspace state directory (`.runyte/`),
-found by walking up from the launch directory. ide and mux need one. Outside a
-workspace they refuse with
-`no workspace here; run runyte --init DIRECTORY to create one`.
+A **workspace** is one project directory and its editor scope: a Git,
+Jujutsu, or Subversion working copy, or a directory holding the workspace state
+directory (`.runyte/`), found by walking up from the launch directory. ide and
+mux need one. Outside a workspace, an ide launch makes the launch directory one;
+mux refuses, and so does ide in the directories listed under
+[Finding the workspace](#starting-a-workspace), with a message naming
+`runyte --init DIRECTORY`.
 
 Persistent sessions work on Unix and Windows; see
 [Windows support](install-and-run.md#windows-support) for the Windows differences.
@@ -33,9 +35,34 @@ Persistent sessions work on Unix and Windows; see
 | `runyte --init /path/to/project` | Make that exact directory a workspace and exit |
 | `runyte --serve` | Run the host in the foreground |
 
-**Finding the workspace.** Runyte walks up from the launch directory to a Git
-root, or else to a workspace state directory (`.runyte/`). See
+**Finding the workspace.** Runyte walks up from the launch directory to the
+nearest Git (`.git`), Jujutsu (`.jj`), or Subversion (`.svn`) root, or else to a
+workspace state directory (`.runyte/`). A working copy wins over a nearer state
+directory. When neither exists, an ide launch makes the launch directory the
+workspace, as Helix uses its working directory: it creates `.runyte/` there,
+says so in a notification, and later launches from it or from a directory below
+it find the same workspace. See
 [Where workspace state lives](configuration.md#where-workspace-state-lives).
+
+Some directories are never made a workspace this way, because a `.runyte/` in
+them would become the workspace of every later launch from a directory below
+with no repository:
+
+- your home directory;
+- the filesystem root;
+- the temporary directory;
+- on Unix, a directory other accounts can write to, or one another account
+  owns.
+
+A launch naming a file outside the launch directory, such as
+`runyte /etc/hosts` from `~/Downloads`, is not made one either: it is about
+that file, not about where the shell happened to be. These launches refuse;
+run `runyte --init DIRECTORY` to make a directory a workspace deliberately, or
+use `runyte --editor`.
+
+A launch that fails after making its workspace, for example because it has no
+terminal, leaves the `.runyte/` it created. mux launches, `--wait`, and session commands never create a
+workspace: run an ide launch or `--init` there first.
 
 **`--init DIRECTORY`** creates the configured state directory (`.runyte/` by
 default) in exactly that directory, prints how to open it, and exits without
